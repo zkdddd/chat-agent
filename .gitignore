@@ -3,6 +3,7 @@ __pycache__/
 .env
 kagent.db
 *.db
+crash.log
 .venv/
 venv/
 .idea/

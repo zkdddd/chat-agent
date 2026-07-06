@@ -35,7 +35,11 @@ def render(text: str) -> str:
         return ""
     html_body = markdown.markdown(
         text,
-        extensions=["fenced_code", "tables", "breaks", "sane_lists"],
+        extensions=[
+            "markdown.extensions.fenced_code",
+            "markdown.extensions.tables",
+            "markdown.extensions.sane_lists",
+        ],
     )
     html_body = _CODE_RE.sub(_highlight_code, html_body)
     return html_body
