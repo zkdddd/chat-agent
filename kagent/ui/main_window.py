@@ -1,6 +1,8 @@
 import html
+import json
 import uuid
 from datetime import datetime
+from typing import Any
 
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
@@ -219,6 +221,38 @@ def _body_width_for_card(viewport_width: int, role: str, text: str) -> int:
     return max(220, min(max_width, estimated))
 
 
+def _pretty_json(value: Any, limit: int = 2600) -> str:
+    text = json.dumps(value, ensure_ascii=False, indent=2)
+    if len(text) > limit:
+        return text[:limit] + "\n... (truncated)"
+    return text
+
+
+def _tool_event_markdown(
+    name: str,
+    args: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    round_idx: int | None = None,
+    status: str | None = None,
+    preview: str | None = None,
+) -> str:
+    parts: list[str] = [f"### `{name}`"]
+    if round_idx is not None:
+        parts.append(f"**轮次** 第 {round_idx} 轮")
+    if status:
+        parts.append(f"**状态** {status}")
+    if preview:
+        parts.append("**预览**")
+        parts.append(f"```diff\n{preview}\n```")
+    if args is not None:
+        parts.append("**输入**")
+        parts.append(f"```json\n{_pretty_json(args)}\n```")
+    if result is not None:
+        parts.append("**结果**")
+        parts.append(f"```json\n{_pretty_json(result)}\n```")
+    return "\n\n".join(parts)
+
+
 def _assistant_body_html(content: str, streaming: bool, thinking: bool) -> str:
     if thinking:
         body = '<span class="typing">正在思考…</span>'
@@ -371,6 +405,221 @@ class MessageCard(QFrame):
         )
 
 
+class ToolLogEntry(QFrame):
+    def __init__(self, width: int, call_id: str, name: str, round_idx: int | None = None):
+        super().__init__()
+        self.call_id = call_id
+        self._width = width
+        self._preview: str | None = None
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        self.setFixedWidth(width)
+        self.setStyleSheet(
+            "background: rgba(9, 16, 27, 0.92); "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 16px;"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        self.name_label = QLabel(name)
+        self.name_label.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
+        self.name_label.setStyleSheet("color: #F8FAFC;")
+
+        self.round_label = QLabel("")
+        self.round_label.setFont(QFont("Microsoft YaHei", 8))
+        self.round_label.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER};")
+
+        self.status_chip = QLabel("执行中")
+        self.status_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.status_chip.setStyleSheet(
+            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
+            "border: 1px solid rgba(124, 58, 237, 0.30); "
+            "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+        )
+
+        header.addWidget(self.name_label)
+        if round_idx is not None:
+            self.round_label.setText(f"第 {round_idx} 轮")
+            header.addWidget(self.round_label)
+        header.addStretch(1)
+        header.addWidget(self.status_chip)
+        layout.addLayout(header)
+
+        self.body = MessageBody()
+        self.body.set_content(
+            '<span class="typing">等待工具输出...</span>',
+            max(220, width - 24),
+            text_color=C_TEXT_MAIN,
+        )
+        layout.addWidget(self.body)
+
+    def set_event(
+        self,
+        status: str,
+        args: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+        round_idx: int | None = None,
+        error: bool = False,
+        preview: str | None = None,
+    ) -> None:
+        if round_idx is not None:
+            self.round_label.setText(f"第 {round_idx} 轮")
+        self.status_chip.setText(status)
+        if preview is not None:
+            self._preview = preview
+        if error:
+            chip_style = (
+                "background: rgba(248, 113, 113, 0.16); color: #FCA5A5; "
+                "border: 1px solid rgba(248, 113, 113, 0.30); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        elif status == "成功":
+            chip_style = (
+                "background: rgba(34, 197, 94, 0.14); color: #BBF7D0; "
+                "border: 1px solid rgba(34, 197, 94, 0.28); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        elif status == "失败":
+            chip_style = (
+                "background: rgba(248, 113, 113, 0.16); color: #FCA5A5; "
+                "border: 1px solid rgba(248, 113, 113, 0.30); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        else:
+            chip_style = (
+                "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
+                "border: 1px solid rgba(124, 58, 237, 0.30); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        self.status_chip.setStyleSheet(chip_style)
+
+        body_md = _tool_event_markdown(
+            self.name_label.text(),
+            args=args,
+            result=result,
+            round_idx=round_idx,
+            status=status,
+            preview=self._preview,
+        )
+        self.body.set_content(
+            render(body_md),
+            max(220, self._width - 24),
+            text_color=C_TEXT_MAIN,
+        )
+
+
+class ToolTraceCard(QFrame):
+    def __init__(self, width: int):
+        super().__init__()
+        self._width = width
+        self._entries: dict[str, ToolLogEntry] = {}
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        self.setFixedWidth(width)
+        self.setStyleSheet(
+            "background: rgba(15, 23, 42, 0.94); "
+            f"border: 1px solid rgba(124, 58, 237, 0.24); border-radius: 20px;"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        title = QLabel("Agent 执行日志")
+        title.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
+        title.setStyleSheet("color: #E9D5FF;")
+
+        self.state_chip = QLabel("执行中")
+        self.state_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.state_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.state_chip.setStyleSheet(
+            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
+            "border: 1px solid rgba(124, 58, 237, 0.30); "
+            "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+        )
+
+        self.hint = QLabel("等待工具调用")
+        self.hint.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px;")
+
+        header.addWidget(title)
+        header.addWidget(self.hint)
+        header.addStretch(1)
+        header.addWidget(self.state_chip)
+        layout.addLayout(header)
+
+        self.entries_layout = QVBoxLayout()
+        self.entries_layout.setSpacing(10)
+        layout.addLayout(self.entries_layout)
+
+        self.empty_label = QLabel("Agent 正在分析任务，工具调用会显示在这里。")
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 12px;")
+        layout.addWidget(self.empty_label)
+
+    def _sync_empty(self):
+        has_entries = bool(self._entries)
+        self.empty_label.setVisible(not has_entries)
+        self.hint.setVisible(not has_entries)
+
+    def set_state(self, text: str, kind: str = "active") -> None:
+        self.state_chip.setText(text)
+        if kind == "done":
+            style = (
+                "background: rgba(34, 197, 94, 0.14); color: #BBF7D0; "
+                "border: 1px solid rgba(34, 197, 94, 0.28); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        elif kind == "error":
+            style = (
+                "background: rgba(248, 113, 113, 0.16); color: #FCA5A5; "
+                "border: 1px solid rgba(248, 113, 113, 0.30); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        else:
+            style = (
+                "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
+                "border: 1px solid rgba(124, 58, 237, 0.30); "
+                "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
+            )
+        self.state_chip.setStyleSheet(style)
+
+    def upsert_event(
+        self,
+        call_id: str,
+        name: str,
+        status: str,
+        args: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+        round_idx: int | None = None,
+        error: bool = False,
+        preview: str | None = None,
+    ) -> ToolLogEntry:
+        entry = self._entries.get(call_id)
+        if entry is None:
+            entry = ToolLogEntry(max(260, self._width - 28), call_id, name, round_idx=round_idx)
+            self._entries[call_id] = entry
+            self.entries_layout.addWidget(entry)
+            self.empty_label.setVisible(False)
+            self.hint.setVisible(False)
+        entry.set_event(
+            status,
+            args=args,
+            result=result,
+            round_idx=round_idx,
+            error=error,
+            preview=preview,
+        )
+        self._sync_empty()
+        return entry
+
+
 class ChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -383,6 +632,9 @@ class ChatWindow(QMainWindow):
         self._streaming_buf = ""
         self._streaming_time = ""
         self._activity = "就绪"
+        self._agent_trace_card: ToolTraceCard | None = None
+        self._agent_trace_row: QWidget | None = None
+        self._tool_trace_events: list[dict[str, Any]] = []
 
         root = QWidget()
         root.setObjectName("root")
@@ -789,6 +1041,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self._streaming_buf = ""
         self._streaming_time = ""
         self._activity = "就绪"
+        self._reset_tool_trace()
         self._load_sessions()
         msgs = db.get_messages(session_id)
         self._render_messages(msgs)
@@ -831,6 +1084,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             self._streaming_buf = ""
             self._streaming_time = ""
             self._activity = "就绪"
+            self._reset_tool_trace()
             self._load_sessions()
             self._render_messages([])
             self.input.setFocus()
@@ -843,6 +1097,8 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
     def _clear_feed(self):
         _clear_layout(self.chat_layout)
+        self._agent_trace_card = None
+        self._agent_trace_row = None
 
     def _bubble_width(self, role: str, content: str) -> int:
         viewport_width = self.chat_scroll.viewport().width()
@@ -889,6 +1145,85 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
         return row
 
+    def _ensure_agent_trace_card(self) -> ToolTraceCard | None:
+        if self._agent_trace_card is not None:
+            return self._agent_trace_card
+        if not self.agent_btn.isChecked():
+            return None
+
+        width = self._bubble_width("assistant", "")
+        trace = ToolTraceCard(width)
+        trace.set_state("执行中", kind="active")
+
+        insert_at = -1
+        if self._streaming_row is not None:
+            insert_at = self.chat_layout.indexOf(self._streaming_row)
+        if insert_at >= 0:
+            self.chat_layout.insertWidget(insert_at, trace)
+        else:
+            self.chat_layout.addWidget(trace)
+
+        self._agent_trace_card = trace
+        self._agent_trace_row = trace
+        if self._tool_trace_events:
+            for event in self._tool_trace_events:
+                self._apply_tool_event(trace, event)
+        return trace
+
+    def _reset_tool_trace(self):
+        self._tool_trace_events = []
+        self._agent_trace_card = None
+        self._agent_trace_row = None
+
+    def _apply_tool_event(self, trace: ToolTraceCard, event: dict[str, Any]):
+        event_type = str(event.get("type", "")).strip()
+        call_id = str(event.get("call_id") or event.get("id") or "")
+        if not call_id:
+            return
+
+        name = str(event.get("name") or "tool")
+        round_idx = event.get("round")
+        try:
+            round_idx = int(round_idx) if round_idx is not None else None
+        except (TypeError, ValueError):
+            round_idx = None
+
+        if event_type == "tool_preview":
+            args = event.get("args") if isinstance(event.get("args"), dict) else {}
+            preview = str(event.get("preview") or "")
+            trace.upsert_event(
+                call_id=call_id,
+                name=name,
+                status="预览",
+                args=args,
+                preview=preview,
+                round_idx=round_idx,
+            )
+        elif event_type == "tool_start":
+            args = event.get("args") if isinstance(event.get("args"), dict) else {}
+            trace.upsert_event(
+                call_id=call_id,
+                name=name,
+                status="执行中",
+                args=args,
+                round_idx=round_idx,
+            )
+        elif event_type == "tool_result":
+            args = event.get("args") if isinstance(event.get("args"), dict) else {}
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            error = not bool(event.get("ok", True))
+            trace.upsert_event(
+                call_id=call_id,
+                name=name,
+                status="失败" if error else "成功",
+                args=args,
+                result=result,
+                round_idx=round_idx,
+                error=error,
+            )
+            if error:
+                trace.set_state("失败", kind="error")
+
     def _render_messages(
         self,
         msgs: list[dict],
@@ -917,6 +1252,16 @@ QScrollBar::add-page, QScrollBar::sub-page {{
                 )
                 self.chat_layout.addWidget(row)
                 last_widget = row
+
+            if self.agent_btn.isChecked() and (
+                self._tool_trace_events
+                or streaming_html is not None
+                or thinking
+                or error_text is not None
+            ):
+                trace = self._ensure_agent_trace_card()
+                if trace is not None:
+                    last_widget = trace
 
             if streaming_html is not None or thinking:
                 row = self._build_message_row(
@@ -948,6 +1293,17 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
         self._refresh_chat_header()
         self._update_status()
+
+    def _on_tool_event(self, event: dict[str, Any]):
+        trace = self._ensure_agent_trace_card()
+        if trace is None:
+            return
+
+        self._apply_tool_event(trace, event)
+        self._tool_trace_events.append(dict(event))
+
+        self.chat_scroll.ensureWidgetVisible(trace, 0, 24)
+        self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum())
 
     # ==================== State ====================
 
@@ -1035,6 +1391,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self._streaming_buf = ""
         self._streaming_time = datetime.now().strftime("%H:%M")
         self._activity = "执行中" if self.agent_btn.isChecked() else "思考中"
+        self._reset_tool_trace()
         self._set_busy_controls(True)
 
         db.save_message(self.current_session, "user", text)
@@ -1050,6 +1407,8 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self.worker.done.connect(self._on_done)
         self.worker.error.connect(self._on_error)
         self.worker.title_ready.connect(self._on_title)
+        if isinstance(self.worker, AgentWorker):
+            self.worker.tool_event.connect(self._on_tool_event)
         self.worker.start()
 
     def _on_chunk(self, piece: str):
@@ -1081,6 +1440,9 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         else:
             msgs = db.get_messages(self.current_session) if self.current_session else []
             self._render_messages(msgs)
+        trace = self._agent_trace_card if self.agent_btn.isChecked() else None
+        if trace is not None:
+            trace.set_state("完成", kind="done")
         self.worker = None
         self._set_busy_controls(False)
         self._sync_send_button_style()
@@ -1097,6 +1459,9 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self._activity = "就绪"
         streaming_html = render(self._streaming_buf) if self._streaming_buf else None
         self._render_messages(msgs, streaming_html=streaming_html, error_text=msg)
+        trace = self._agent_trace_card if self.agent_btn.isChecked() else None
+        if trace is not None:
+            trace.set_state("失败", kind="error")
         self.worker = None
         self._set_busy_controls(False)
         self._sync_send_button_style()

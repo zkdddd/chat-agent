@@ -8,6 +8,7 @@ class AgentWorker(QThread):
     """后台线程：调用 coding agent，逐段输出工具执行与结果。"""
 
     chunk = pyqtSignal(str)
+    tool_event = pyqtSignal(object)
     done = pyqtSignal(str)
     error = pyqtSignal(str)
     title_ready = pyqtSignal(str)
@@ -33,6 +34,7 @@ class AgentWorker(QThread):
             report = agent.run(
                 self.history,
                 emit=self.chunk.emit,
+                on_event=self.tool_event.emit,
                 should_stop=lambda: self._stop,
             )
 

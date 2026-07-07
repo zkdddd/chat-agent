@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import fnmatch
+import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from ..config import BASE_DIR
+
+
+DEFAULT_IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "dist",
+    "build",
+}
 
 
 class WorkspaceError(ValueError):
@@ -32,9 +48,10 @@ class WorkspaceTools:
 
     def _rel(self, path: Path) -> str:
         try:
-            return str(path.relative_to(self.root))
+            rel = path.relative_to(self.root)
+            return "." if not rel.parts else rel.as_posix()
         except Exception:
-            return str(path)
+            return path.as_posix() if isinstance(path, Path) else str(path)
 
     @staticmethod
     def _clip(text: str, limit: int = 20000) -> tuple[str, bool]:
@@ -43,6 +60,64 @@ class WorkspaceTools:
         if len(text) <= limit:
             return text, False
         return text[:limit], True
+
+    @staticmethod
+    def _is_hidden(name: str) -> bool:
+        return name.startswith(".")
+
+    @staticmethod
+    def _is_text_file(path: Path) -> bool:
+        suffix = path.suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".pdf", ".zip", ".7z", ".tar", ".gz", ".bz2", ".xz", ".pyc", ".pyd", ".dll", ".exe", ".so", ".dylib"}:
+            return False
+        return True
+
+    def _iter_directory(
+        self,
+        root: Path,
+        max_depth: int | None,
+        ignore_hidden: bool,
+    ):
+        start_depth = len(root.parts)
+        for current_root, dirs, files in os.walk(root):
+            current = Path(current_root)
+            depth = len(current.parts) - start_depth
+            if max_depth is not None and depth > max_depth:
+                dirs[:] = []
+                continue
+
+            dirs.sort()
+            files.sort()
+
+            if ignore_hidden:
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if not self._is_hidden(d) and d not in DEFAULT_IGNORED_DIRS
+                ]
+                files = [f for f in files if not self._is_hidden(f)]
+
+            yield current, depth, dirs, files
+
+    def _patch_paths(self, patch_text: str) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for line in patch_text.splitlines():
+            if line.startswith("diff --git "):
+                parts = line.split()
+                if len(parts) >= 4:
+                    candidate = parts[3]
+                    if candidate.startswith("b/"):
+                        rel = candidate[2:]
+                        if rel not in seen:
+                            seen.add(rel)
+                            paths.append(rel)
+            elif line.startswith("+++ b/"):
+                rel = line[6:].strip()
+                if rel != "/dev/null" and rel not in seen:
+                    seen.add(rel)
+                    paths.append(rel)
+        return paths
 
     def read_file(
         self,
@@ -87,6 +162,212 @@ class WorkspaceTools:
             "line_count": total_lines,
             "content": selected,
             "truncated": truncated,
+        }
+
+    def list_files(
+        self,
+        path: str = ".",
+        max_depth: int | None = 3,
+        include_dirs: bool = True,
+        include_hidden: bool = False,
+        max_results: int = 500,
+    ) -> dict[str, Any]:
+        start = self._resolve_path(path)
+        if not start.exists():
+            raise WorkspaceError(f"Path not found: {self._rel(start)}")
+        if start.is_file():
+            start = start.parent
+        if not start.is_dir():
+            raise WorkspaceError(f"Expected a directory but found a file: {self._rel(start)}")
+
+        if max_depth is not None:
+            max_depth = max(0, int(max_depth))
+        max_results = max(1, int(max_results))
+
+        items: list[dict[str, Any]] = []
+        truncated = False
+        ignored_count = 0
+
+        for current, depth, dirs, files in self._iter_directory(start, max_depth, not include_hidden):
+            if include_dirs:
+                for name in dirs:
+                    if not include_hidden and name in DEFAULT_IGNORED_DIRS:
+                        ignored_count += 1
+                        continue
+                    child = current / name
+                    rel = self._rel(child)
+                    if len(items) >= max_results:
+                        truncated = True
+                        break
+                    items.append(
+                        {
+                            "type": "dir",
+                            "name": name,
+                            "path": rel,
+                            "depth": depth + 1,
+                        }
+                    )
+                if truncated:
+                    break
+
+            for name in files:
+                child = current / name
+                rel = self._rel(child)
+                if len(items) >= max_results:
+                    truncated = True
+                    break
+                stat = child.stat()
+                items.append(
+                    {
+                        "type": "file",
+                        "name": name,
+                        "path": rel,
+                        "depth": depth + 1,
+                        "size": stat.st_size,
+                    }
+                )
+            if truncated:
+                break
+
+        return {
+            "root": str(start),
+            "path": self._rel(start),
+            "items": items,
+            "count": len(items),
+            "truncated": truncated,
+            "ignored_count": ignored_count,
+            "max_depth": max_depth,
+        }
+
+    def search_file(
+        self,
+        query: str,
+        path: str = ".",
+        file_glob: str = "*",
+        case_sensitive: bool = False,
+        include_hidden: bool = False,
+        context_lines: int = 1,
+        max_results: int = 50,
+    ) -> dict[str, Any]:
+        if not query or not query.strip():
+            raise WorkspaceError("query is required")
+
+        start = self._resolve_path(path)
+        if not start.exists():
+            raise WorkspaceError(f"Path not found: {self._rel(start)}")
+
+        if start.is_file():
+            candidates = [start]
+            base_dir = start.parent
+        else:
+            base_dir = start
+            candidates = []
+            for current, _, dirs, files in self._iter_directory(start, None, not include_hidden):
+                for name in files:
+                    child = current / name
+                    rel = child.relative_to(base_dir).as_posix()
+                    if fnmatch.fnmatch(name, file_glob) or fnmatch.fnmatch(rel, file_glob):
+                        candidates.append(child)
+
+        max_results = max(1, int(max_results))
+        context_lines = max(0, int(context_lines))
+        needle = query if case_sensitive else query.lower()
+
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        skipped_binary = 0
+        truncated = False
+
+        for file_path in candidates:
+            if len(matches) >= max_results:
+                truncated = True
+                break
+            if file_path.is_dir():
+                continue
+            scanned += 1
+            if file_path.stat().st_size > 1_500_000:
+                continue
+            if not self._is_text_file(file_path):
+                skipped_binary += 1
+                continue
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                skipped_binary += 1
+                continue
+
+            lines = text.splitlines()
+            for line_no, line in enumerate(lines, start=1):
+                haystack = line if case_sensitive else line.lower()
+                if needle not in haystack:
+                    continue
+
+                start_line = max(1, line_no - context_lines)
+                end_line = min(len(lines), line_no + context_lines)
+                snippet = "\n".join(lines[start_line - 1 : end_line])
+                matches.append(
+                    {
+                        "path": self._rel(file_path),
+                        "line_number": line_no,
+                        "line": line,
+                        "snippet": snippet,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                    }
+                )
+                if len(matches) >= max_results:
+                    truncated = True
+                    break
+            if truncated:
+                break
+
+        return {
+            "query": query,
+            "path": self._rel(start),
+            "file_glob": file_glob,
+            "matches": matches,
+            "count": len(matches),
+            "scanned_files": scanned,
+            "skipped_binary": skipped_binary,
+            "truncated": truncated,
+            "case_sensitive": case_sensitive,
+            "context_lines": context_lines,
+        }
+
+    def apply_patch(self, patch: str) -> dict[str, Any]:
+        if not patch or not patch.strip():
+            raise WorkspaceError("patch is required")
+
+        proc = subprocess.run(
+            ["git", "apply", "--recount", "--whitespace=nowarn"],
+            cwd=str(self.root),
+            input=patch.encode("utf-8"),
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()
+            stdout = (proc.stdout or b"").decode("utf-8", "replace").strip()
+            message = stderr or stdout or "git apply failed"
+            raise WorkspaceError(message)
+
+        files_touched = self._patch_paths(patch)
+        return {
+            "ok": True,
+            "files_touched": files_touched,
+            "file_count": len(files_touched),
+            "patch_bytes": len(patch.encode("utf-8")),
+        }
+
+    def preview_patch(self, patch: str) -> dict[str, Any]:
+        if not patch or not patch.strip():
+            raise WorkspaceError("patch is required")
+
+        files_touched = self._patch_paths(patch)
+        return {
+            "files_touched": files_touched,
+            "file_count": len(files_touched),
+            "patch_bytes": len(patch.encode("utf-8")),
+            "patch_lines": patch.count("\n") + 1,
         }
 
     def write_file(self, path: str, content: str) -> dict[str, Any]:
