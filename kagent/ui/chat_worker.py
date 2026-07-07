@@ -23,6 +23,10 @@ class ChatWorker(QThread):
 
     def run(self):
         try:
+            if self._stop:
+                self.done.emit("")
+                return
+
             # 用户消息已由主线程保存到 DB，history 也已包含
             # 首条消息生成会话标题
             if len(self.history) == 1:

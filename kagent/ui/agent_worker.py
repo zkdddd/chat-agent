@@ -1,3 +1,5 @@
+import threading
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from .. import db, llm
@@ -19,9 +21,21 @@ class AgentWorker(QThread):
         self.message = message
         self.history = history
         self._stop = False
+        self._approval_lock = threading.Lock()
+        self._approval_waiters: dict[str, dict[str, object]] = {}
 
     def stop(self):
         self._stop = True
+
+    def resolve_approval(self, call_id: str, approved: bool) -> None:
+        with self._approval_lock:
+            waiter = self._approval_waiters.get(call_id)
+            if waiter is None:
+                return
+            waiter["approved"] = bool(approved)
+            event = waiter.get("event")
+        if isinstance(event, threading.Event):
+            event.set()
 
     @staticmethod
     def _final_answer_from_report(report: str) -> str:
@@ -31,16 +45,72 @@ class AgentWorker(QThread):
             text = report[idx + len(marker):].strip()
             if text:
                 return text
+        if "已中止" in report:
+            return ""
         return report.strip()
+
+    def _confirm_tool(
+        self,
+        call_id: str,
+        name: str,
+        args: dict,
+        preview: str | None,
+        round_idx: int | None,
+    ) -> bool:
+        gate = threading.Event()
+        with self._approval_lock:
+            self._approval_waiters[call_id] = {"event": gate, "approved": None}
+
+        self.tool_event.emit(
+            {
+                "type": "tool_approval_required",
+                "call_id": call_id,
+                "name": name,
+                "args": args,
+                "preview": preview,
+                "round": round_idx,
+            }
+        )
+
+        approved = False
+        while not self._stop:
+            if gate.wait(0.1):
+                with self._approval_lock:
+                    waiter = self._approval_waiters.get(call_id, {})
+                    approved = bool(waiter.get("approved"))
+                break
+
+        with self._approval_lock:
+            self._approval_waiters.pop(call_id, None)
+
+        self.tool_event.emit(
+            {
+                "type": "tool_approval_decision",
+                "call_id": call_id,
+                "name": name,
+                "args": args,
+                "preview": preview,
+                "round": round_idx,
+                "approved": approved,
+            }
+        )
+        return approved
 
     def run(self):
         try:
+            if self._stop:
+                self.done.emit("")
+                return
+
             if len(self.history) == 1:
                 title = llm.generate_title(self.message)
                 self.title_ready.emit(title)
                 db.rename_session(self.session_id, title)
 
-            agent = CodeAgent()
+            agent = CodeAgent(
+                confirm_tool=self._confirm_tool,
+                session_id=self.session_id,
+            )
             report = agent.run(
                 self.history,
                 emit=self.chunk.emit,
