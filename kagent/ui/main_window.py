@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import QEvent, Qt, QSize, QTimer
 from PyQt6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
@@ -839,6 +839,35 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self.chat_layout.setContentsMargins(24, 22, 24, 22)
         self.chat_layout.setSpacing(14)
         self.chat_scroll.setWidget(self.chat_content)
+        self.chat_scroll.verticalScrollBar().valueChanged.connect(self._update_scroll_to_bottom_button)
+        self.chat_scroll.verticalScrollBar().rangeChanged.connect(self._update_scroll_to_bottom_button)
+        self.chat_scroll.viewport().installEventFilter(self)
+
+        self.scroll_bottom_btn = QPushButton("↓", self.chat_scroll.viewport())
+        self.scroll_bottom_btn.setFixedSize(38, 38)
+        self.scroll_bottom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.scroll_bottom_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll_bottom_btn.setToolTip("回到底部")
+        self.scroll_bottom_btn.clicked.connect(self._scroll_to_bottom)
+        self.scroll_bottom_btn.setStyleSheet(
+            "QPushButton {"
+            "background: rgba(15, 23, 42, 0.92);"
+            "color: #E2E8F0;"
+            "border: 1px solid rgba(148, 163, 184, 0.24);"
+            "border-radius: 19px;"
+            "font-size: 18px;"
+            "font-weight: 800;"
+            "}"
+            "QPushButton:hover {"
+            "background: rgba(37, 99, 235, 0.22);"
+            "border: 1px solid rgba(96, 165, 250, 0.45);"
+            "}"
+            "QPushButton:pressed {"
+            "background: rgba(59, 130, 246, 0.30);"
+            "}"
+        )
+        self.scroll_bottom_btn.hide()
+        self.scroll_bottom_btn.raise_()
         v.addWidget(self.chat_scroll, 1)
 
         v.addWidget(self._build_input_bar())
@@ -1003,6 +1032,38 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         v.addWidget(hint)
 
         return card
+
+    def _scroll_to_bottom(self):
+        scrollbar = self.chat_scroll.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        self._update_scroll_to_bottom_button()
+
+    def _update_scroll_to_bottom_button(self, *args):
+        btn = getattr(self, "scroll_bottom_btn", None)
+        if btn is None:
+            return
+
+        scrollbar = self.chat_scroll.verticalScrollBar()
+        maximum = scrollbar.maximum()
+        value = scrollbar.value()
+        should_show = maximum > 0 and value < max(0, maximum - 4)
+
+        if should_show:
+            viewport = self.chat_scroll.viewport()
+            margin = 18
+            x = max(margin, viewport.width() - btn.width() - margin)
+            y = max(margin, viewport.height() - btn.height() - margin)
+            btn.move(x, y)
+            btn.show()
+            btn.raise_()
+        else:
+            btn.hide()
+
+    def eventFilter(self, obj, event):
+        viewport = self.chat_scroll.viewport() if hasattr(self, "chat_scroll") else None
+        if obj is viewport and event.type() == QEvent.Type.Resize:
+            self._update_scroll_to_bottom_button()
+        return super().eventFilter(obj, event)
 
     # ==================== Sessions ====================
 
@@ -1307,6 +1368,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             self.chat_content.setUpdatesEnabled(True)
             self.chat_scroll.setUpdatesEnabled(True)
             self.chat_scroll.viewport().update()
+            self._update_scroll_to_bottom_button()
 
     def _on_tool_event(self, event: dict[str, Any]):
         trace = self._ensure_agent_trace_card()
