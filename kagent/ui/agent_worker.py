@@ -4,6 +4,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from .. import db, llm
 from ..agent import CodeAgent
+from ..config import (
+    CONTEXT_KEEP_RECENT_MESSAGES,
+    CONTEXT_MAX_TOKENS,
+    CONTEXT_PER_MESSAGE_MAX_CHARS,
+    CONTEXT_SUMMARY_MAX_CHARS,
+)
+from ..context import prepare_session_history
 
 
 class AgentWorker(QThread):
@@ -131,12 +138,38 @@ class AgentWorker(QThread):
             # 标题生成不阻塞 agent 首轮工具调用和停止操作。
             self._schedule_title_generation()
 
+            agent_history, summary_update = prepare_session_history(
+                self.history,
+                persisted_summary=db.get_context_summary(self.session_id),
+                max_tokens=CONTEXT_MAX_TOKENS,
+                keep_recent_messages=CONTEXT_KEEP_RECENT_MESSAGES,
+                summary_max_chars=CONTEXT_SUMMARY_MAX_CHARS,
+                per_message_max_chars=CONTEXT_PER_MESSAGE_MAX_CHARS,
+            )
+            if summary_update is not None:
+                db.save_context_summary(
+                    self.session_id,
+                    summary_update.summary,
+                    summary_update.through_message_id,
+                    summary_update.source_message_count,
+                )
+                self.tool_event.emit(
+                    {
+                        "type": "agent_status",
+                        "status": (
+                            "Saved context summary "
+                            f"through message #{summary_update.through_message_id}"
+                        ),
+                        "kind": "active",
+                    }
+                )
+
             agent = CodeAgent(
                 confirm_tool=self._confirm_tool,
                 session_id=self.session_id,
             )
             report = agent.run(
-                self.history,
+                agent_history,
                 emit=self.chunk.emit,
                 on_event=self.tool_event.emit,
                 should_stop=lambda: self._stop,
@@ -147,6 +180,9 @@ class AgentWorker(QThread):
                 db.save_message(self.session_id, "assistant", answer)
             self.done.emit(answer)
         except Exception as e:
+            agent_obj = locals().get("agent")
+            if isinstance(agent_obj, CodeAgent):
+                agent_obj._finish_run_log("error", {"error": str(e)})
             if self._stop:
                 self.done.emit("")
                 return

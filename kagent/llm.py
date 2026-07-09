@@ -3,7 +3,17 @@ from typing import Iterator
 
 from openai import OpenAI, Stream
 
-from .config import OPENAI_API_KEY, OPENAI_BASE_URL, MODEL, SYSTEM_PROMPT
+from .config import (
+    CONTEXT_KEEP_RECENT_MESSAGES,
+    CONTEXT_MAX_TOKENS,
+    CONTEXT_PER_MESSAGE_MAX_CHARS,
+    CONTEXT_SUMMARY_MAX_CHARS,
+    MODEL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    SYSTEM_PROMPT,
+)
+from .context import manage_context
 
 client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 CHAT_REQUEST_TIMEOUT_SECONDS = float(os.getenv("KAGENT_CHAT_TIMEOUT_SECONDS", "45"))
@@ -21,6 +31,13 @@ def open_chat_stream(
     timeout: float | None = STREAM_REQUEST_TIMEOUT_SECONDS,
 ) -> Stream:
     full = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    full, _ = manage_context(
+        full,
+        max_tokens=CONTEXT_MAX_TOKENS,
+        keep_recent_messages=CONTEXT_KEEP_RECENT_MESSAGES,
+        summary_max_chars=CONTEXT_SUMMARY_MAX_CHARS,
+        per_message_max_chars=CONTEXT_PER_MESSAGE_MAX_CHARS,
+    )
     return client.chat.completions.create(
         model=MODEL,
         messages=full,

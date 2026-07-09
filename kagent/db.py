@@ -44,6 +44,18 @@ def init_db() -> None:
         )
         c.execute(
             """
+            CREATE TABLE IF NOT EXISTS context_summaries (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                through_message_id INTEGER NOT NULL DEFAULT 0,
+                source_message_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        c.execute(
+            """
             CREATE TABLE IF NOT EXISTS rollback_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -88,6 +100,7 @@ def list_sessions() -> list[dict]:
 def delete_session(session_id: str) -> None:
     with _lock, _conn() as c:
         c.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        c.execute("DELETE FROM context_summaries WHERE session_id = ?", (session_id,))
         c.execute("DELETE FROM rollback_entries WHERE session_id = ?", (session_id,))
         c.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
@@ -103,13 +116,68 @@ def save_message(session_id: str, role: str, content: str) -> None:
 def get_messages(session_id: str) -> list[dict]:
     with _lock, _conn() as c:
         rows = c.execute(
-            "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY id",
+            "SELECT id, role, content, created_at FROM messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
         return [
-            {"role": r["role"], "content": r["content"], "created_at": r["created_at"]}
+            {
+                "id": r["id"],
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": r["created_at"],
+            }
             for r in rows
         ]
+
+
+def get_context_summary(session_id: str) -> dict | None:
+    with _lock, _conn() as c:
+        row = c.execute(
+            """
+            SELECT session_id, summary, through_message_id, source_message_count, updated_at
+            FROM context_summaries
+            WHERE session_id = ?
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "session_id": row["session_id"],
+            "summary": row["summary"],
+            "through_message_id": row["through_message_id"],
+            "source_message_count": row["source_message_count"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def save_context_summary(
+    session_id: str,
+    summary: str,
+    through_message_id: int,
+    source_message_count: int,
+) -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            """
+            INSERT INTO context_summaries (
+                session_id, summary, through_message_id, source_message_count, updated_at
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(session_id) DO UPDATE SET
+                summary = excluded.summary,
+                through_message_id = excluded.through_message_id,
+                source_message_count = excluded.source_message_count,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                session_id,
+                summary,
+                int(through_message_id),
+                int(source_message_count),
+            ),
+        )
 
 
 def save_rollback_entry(

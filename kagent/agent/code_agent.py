@@ -1,27 +1,105 @@
 from __future__ import annotations
 
 import json
-import re
-import subprocess
-import sys
-from pathlib import Path
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable
 
 from ..config import (
     AGENT_SYSTEM_PROMPT,
     APP_LANGUAGE,
+    CONTEXT_KEEP_RECENT_MESSAGES,
+    CONTEXT_MAX_TOKENS,
+    CONTEXT_PER_MESSAGE_MAX_CHARS,
+    CONTEXT_SUMMARY_MAX_CHARS,
     FILESYSTEM_COMMAND_SCOPE,
     FILESYSTEM_READ_SCOPE,
     FILESYSTEM_WRITE_SCOPE,
     MODEL,
 )
+from ..context import manage_context
 from ..llm import AGENT_REQUEST_TIMEOUT_SECONDS, client
+from .change_plan import build_change_plan
+from .failure_diagnostics import extract_failure_diagnostics
+from .failure_focus import focus_prompt, focus_targets_from_diagnostics
+from .risk_policy import tool_policy
+from .patch_recovery import patch_failure_recovery, patch_recovery_prompt
+from .run_log import RunLogger
+from .symbol_index import find_symbols
+from .task_plan import (
+    PlanStatus,
+    PlanStep,
+    build_task_plan,
+    plan_for_model,
+    plan_summary_text,
+    plan_to_dicts,
+    set_plan_step,
+)
+from .tool_schema import tool_schema
+from .tool_loop_guard import loop_warning_prompt, record_tool_call
+from .tool_result_context import tool_result_json_for_model
+from .tool_view import tool_display_args, tool_preview_text, tool_report_section
+from .validation import (
+    build_focused_validation_commands,
+    build_validation_plan,
+    validation_result_summary,
+    validation_failure_prompt,
+    validation_prompt,
+)
 from .workspace import WorkspaceError, WorkspaceTools
 
 EmitFn = Callable[[str], None]
 EventFn = Callable[[dict[str, Any]], None]
 StopFn = Callable[[], bool]
 ConfirmFn = Callable[[str, str, dict[str, Any], str | None, int | None, dict[str, Any]], bool]
+
+
+class AgentPhase(str, Enum):
+    STARTING = "starting"
+    INSPECTING = "inspecting"
+    PLANNING = "planning"
+    EDITING = "editing"
+    VALIDATING = "validating"
+    REPAIRING = "repairing"
+    FINALIZING = "finalizing"
+    STOPPED = "stopped"
+
+
+PHASE_STATUS_LABELS = {
+    AgentPhase.STARTING: "Starting",
+    AgentPhase.INSPECTING: "Inspecting project",
+    AgentPhase.PLANNING: "Planning next step",
+    AgentPhase.EDITING: "Editing files",
+    AgentPhase.VALIDATING: "Running validation",
+    AgentPhase.REPAIRING: "Repairing failed validation",
+    AgentPhase.FINALIZING: "Preparing final answer",
+    AgentPhase.STOPPED: "Stopped",
+}
+
+
+@dataclass
+class AgentRunState:
+    phase: AgentPhase = AgentPhase.STARTING
+    inspected: bool = False
+    mutated: bool = False
+    content_changed: bool = False
+    validated: bool = False
+    validation_failed: bool = False
+    changed_paths: set[str] | None = None
+    last_validation_summary: str | None = None
+    plan: list[PlanStep] | None = None
+    focused_validation_commands: list[dict[str, Any]] | None = None
+    tool_call_history: list[dict[str, Any]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.changed_paths is None:
+            self.changed_paths = set()
+        if self.plan is None:
+            self.plan = []
+        if self.focused_validation_commands is None:
+            self.focused_validation_commands = []
+        if self.tool_call_history is None:
+            self.tool_call_history = []
 
 AGENT_WORKFLOW_HINT = """
 Use the workspace tools in this order when it helps:
@@ -44,240 +122,22 @@ Prefer low-risk read and validation steps first. Avoid destructive commands or b
 """
 
 
-def _tool_schema() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "list_files",
-                "description": "List files and directories in the workspace. Use this to inspect project structure before reading files.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path relative to the workspace root or an absolute path inside the workspace."},
-                        "max_depth": {"type": "integer", "minimum": 0, "description": "Maximum depth below the start path."},
-                        "include_dirs": {"type": "boolean", "description": "Whether to include directories in the listing."},
-                        "include_hidden": {"type": "boolean", "description": "Whether to include hidden files and directories."},
-                        "max_results": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum number of entries to return."},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_file",
-                "description": "Search text inside workspace files and return matching lines with context.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Text to search for."},
-                        "path": {"type": "string", "description": "Directory or file path relative to the workspace root or an absolute path inside the workspace."},
-                        "file_glob": {"type": "string", "description": "Optional filename glob such as *.py or *.md."},
-                        "case_sensitive": {"type": "boolean", "description": "Whether the search should be case sensitive."},
-                        "include_hidden": {"type": "boolean", "description": "Whether to include hidden files and directories."},
-                        "context_lines": {"type": "integer", "minimum": 0, "description": "Number of surrounding lines to include."},
-                        "max_results": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of matches to return."},
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read a UTF-8 text file from the workspace. Paths should be relative to the workspace root when possible.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "File path relative to the workspace root or an absolute path inside the workspace."},
-                        "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based starting line."},
-                        "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based ending line."},
-                        "max_chars": {"type": "integer", "minimum": 1, "description": "Maximum characters to return from the selected range."},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "Overwrite a UTF-8 text file inside the workspace with the provided full content.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "File path relative to the workspace root or an absolute path inside the workspace."},
-                        "content": {"type": "string", "description": "Full file content to write."},
-                    },
-                    "required": ["path", "content"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "rename_path",
-                "description": "Rename or move a file or directory inside the workspace.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "source_path": {"type": "string", "description": "Existing file or directory path inside the workspace."},
-                        "target_path": {"type": "string", "description": "New file or directory path inside the workspace."},
-                    },
-                    "required": ["source_path", "target_path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "copy_path",
-                "description": "Copy a file or directory inside the workspace.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "source_path": {"type": "string", "description": "Existing file or directory path inside the workspace."},
-                        "target_path": {"type": "string", "description": "Destination path inside the workspace."},
-                    },
-                    "required": ["source_path", "target_path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "delete_path",
-                "description": "Delete a file or directory inside the workspace.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Existing file or directory path inside the workspace."},
-                        "recursive": {"type": "boolean", "description": "Whether to delete directories recursively. Defaults to true."},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "make_directory",
-                "description": "Create a directory inside the workspace when its parent already exists.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path to create inside the workspace."},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "apply_patch",
-                "description": "Apply a unified diff patch to files inside the workspace.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "patch": {"type": "string", "description": "A unified diff patch beginning with diff --git lines."},
-                    },
-                    "required": ["patch"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "run_command",
-                "description": "Run a shell command inside the workspace root or an allowed workspace subdirectory.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string", "description": "The shell command to run."},
-                        "cwd": {"type": "string", "description": "Optional working directory relative to the workspace root or an absolute path inside the workspace."},
-                        "timeout_ms": {"type": "integer", "minimum": 1, "description": "Command timeout in milliseconds."},
-                    },
-                    "required": ["command"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_rollback_history",
-                "description": "List recent rollback records for this chat session.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum number of rollback entries to return."},
-                        "include_inactive": {"type": "boolean", "description": "Whether to include already applied or superseded rollback entries."},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "preview_rollback_change",
-                "description": "Preview the exact file diff for a specific rollback history id without applying it.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "rollback_id": {"type": "integer", "minimum": 1, "description": "The rollback history id to inspect."},
-                    },
-                    "required": ["rollback_id"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "rollback_last_change",
-                "description": "Undo the most recent workspace mutation recorded for this chat session.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "rollback_change",
-                "description": "Undo a specific rollback record by its rollback_id in this chat session.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "rollback_id": {"type": "integer", "minimum": 1, "description": "The rollback history id to restore."},
-                    },
-                    "required": ["rollback_id"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ]
+def _normalize_display_text(text: str) -> str:
+    return (
+        text.replace("\u6d60\u8bf2\u59df", "任务")
+        .replace("\u5bb8\u30e4\u7d94\u9356\u7bedn\n", "工作区\n\n")
+        .replace("\u5bb8\u8e6d\u8151\u59dd\ue542n", "已中止\n")
+        .replace("\u7f01\u64b4\u7049", "结果")
+        .replace("\u5bb8\u30e5\u53ff\u748b\u51aa\u6564", "工具调用")
+    )
+
 
 
 class CodeAgent:
     INSPECTION_TOOLS = {
         "list_files",
         "search_file",
+        "find_symbol",
         "read_file",
         "list_rollback_history",
         "preview_rollback_change",
@@ -300,90 +160,6 @@ class CodeAgent:
     }
     VALIDATION_TOOLS = {"run_command"}
     MAX_VALIDATION_REPAIR_ROUNDS = 3
-    MAX_VALIDATION_PLAN_COMMANDS = 2
-    RISK_LEVELS = ("safe", "low", "medium", "high", "critical")
-    RISK_LABELS = {
-        "safe": "Safe",
-        "low": "Low risk",
-        "medium": "Medium risk",
-        "high": "High risk",
-        "critical": "Critical",
-    }
-    SENSITIVE_PATH_NAMES = {
-        ".env",
-        ".gitignore",
-        "main.py",
-        "requirements.txt",
-        "pyproject.toml",
-        "package.json",
-        "package-lock.json",
-        "pnpm-lock.yaml",
-        "yarn.lock",
-        "cargo.toml",
-        "cargo.lock",
-        "go.mod",
-        "go.sum",
-    }
-    SENSITIVE_PATH_PARTS = {
-        ".git",
-        ".github",
-        ".vscode",
-        ".idea",
-    }
-    SAFE_COMMAND_PATTERNS = (
-        r"(^| )dir( |$)",
-        r"(^| )ls( |$)",
-        r"(^| )pwd( |$)",
-        r"(^| )rg( |$)",
-        r"(^| )git status( |$)",
-        r"(^| )git diff( |$)",
-        r"(^| )type( |$)",
-        r"(^| )cat( |$)",
-        r"(^| )get-content( |$)",
-        r"(^| )python(?:\.exe)? -m py_compile( |$)",
-        r"(^| )python(?:\.exe)? -m pytest( |$)",
-        r"-m py_compile( |$)",
-        r"-m pytest( |$)",
-        r"(^| )pytest( |$)",
-        r"(^| )ruff check( |$)",
-        r"(^| )mypy( |$)",
-        r"(^| )(npm|pnpm|yarn) (run )?(lint|test|typecheck|build)( |$)",
-        r"(^| )cargo test( |$)",
-        r"(^| )go test( |$)",
-    )
-    CRITICAL_COMMAND_PATTERNS = (
-        "rm -rf",
-        "rm -r ",
-        "del /f",
-        "del /q",
-        "erase /f",
-        "rd /s",
-        "rmdir /s",
-        "remove-item -recurse",
-        "remove-item -force",
-        "git reset --hard",
-        "git clean -fd",
-        "format ",
-        "shutdown ",
-    )
-    HIGH_RISK_COMMAND_PATTERNS = (
-        "git push",
-        "git commit",
-        "git merge",
-        "git rebase",
-        "pip install",
-        "pip uninstall",
-        "npm install",
-        "npm uninstall",
-        "pnpm install",
-        "pnpm remove",
-        "yarn add",
-        "yarn remove",
-        "set-content ",
-        "add-content ",
-        "out-file ",
-        "start-process ",
-    )
 
     def __init__(
         self,
@@ -399,6 +175,39 @@ class CodeAgent:
         )
         self.model = model
         self.confirm_tool = confirm_tool
+        self.session_id = session_id
+        self.run_logger: RunLogger | None = None
+        self._run_log_finished = False
+        self._context_compaction_notified = False
+
+    def _prepare_model_messages(
+        self,
+        messages: list[dict[str, Any]],
+        on_event: EventFn | None,
+    ) -> list[dict[str, Any]]:
+        managed, stats = manage_context(
+            messages,
+            max_tokens=CONTEXT_MAX_TOKENS,
+            keep_recent_messages=CONTEXT_KEEP_RECENT_MESSAGES,
+            summary_max_chars=CONTEXT_SUMMARY_MAX_CHARS,
+            per_message_max_chars=CONTEXT_PER_MESSAGE_MAX_CHARS,
+        )
+        if stats.compacted:
+            messages[:] = managed
+            if not self._context_compaction_notified:
+                self._context_compaction_notified = True
+                self._emit_event(
+                    on_event,
+                    {
+                        "type": "agent_status",
+                        "status": (
+                            "Context compacted "
+                            f"({stats.original_tokens} -> {stats.final_tokens} estimated tokens)"
+                        ),
+                        "kind": "active",
+                    },
+                )
+        return managed
 
     @staticmethod
     def _task_requires_tools(user_task: str) -> bool:
@@ -520,274 +329,6 @@ class CodeAgent:
         return "error" not in result
 
     @classmethod
-    def _risk_rank(cls, level: str) -> int:
-        try:
-            return cls.RISK_LEVELS.index(str(level).strip().lower())
-        except ValueError:
-            return cls.RISK_LEVELS.index("medium")
-
-    @classmethod
-    def _build_tool_policy(
-        cls,
-        *,
-        level: str,
-        reason: str,
-        destructive: bool = False,
-        approval_required: bool | None = None,
-    ) -> dict[str, Any]:
-        normalized = str(level or "medium").strip().lower()
-        if normalized not in cls.RISK_LEVELS:
-            normalized = "medium"
-        if approval_required is None:
-            approval_required = destructive or cls._risk_rank(normalized) >= cls._risk_rank("medium")
-        return {
-            "risk_level": normalized,
-            "risk_label": cls.RISK_LABELS.get(normalized, normalized.title()),
-            "approval_required": bool(approval_required),
-            "destructive": bool(destructive),
-            "reason": reason.strip() or "This action changes the workspace.",
-        }
-
-    @classmethod
-    def _is_sensitive_path(cls, raw_path: str) -> bool:
-        path = Path(str(raw_path or ""))
-        name = path.name.lower()
-        parts = {part.lower() for part in path.parts}
-        if name in cls.SENSITIVE_PATH_NAMES:
-            return True
-        if name.startswith(".env"):
-            return True
-        return bool(parts & cls.SENSITIVE_PATH_PARTS)
-
-    @staticmethod
-    def _patch_change_counts(patch: str) -> tuple[int, int]:
-        added = 0
-        removed = 0
-        for line in str(patch or "").splitlines():
-            if line.startswith(("diff --git ", "index ", "@@ ", "+++ ", "--- ")):
-                continue
-            if line.startswith("+"):
-                added += 1
-            elif line.startswith("-"):
-                removed += 1
-        return added, removed
-
-    @staticmethod
-    def _normalize_command(command: str) -> str:
-        return " ".join(str(command or "").strip().lower().split())
-
-    @classmethod
-    def _command_tool_policy(cls, args: dict[str, Any], display_args: dict[str, Any]) -> dict[str, Any]:
-        command = str(display_args.get("command") or args.get("command") or "")
-        cwd = str(display_args.get("cwd") or args.get("cwd") or ".")
-        normalized = cls._normalize_command(command)
-        if not normalized:
-            return cls._build_tool_policy(
-                level="medium",
-                reason="This command could not be classified.",
-            )
-
-        for pattern in cls.CRITICAL_COMMAND_PATTERNS:
-            if pattern in normalized:
-                return cls._build_tool_policy(
-                    level="critical",
-                    destructive=True,
-                    reason=f"This command includes a destructive shell pattern: `{pattern}`.",
-                )
-
-        if re.search(r"(^| )(del|erase|rm|rd|rmdir|remove-item)( |$)", normalized):
-            return cls._build_tool_policy(
-                level="critical",
-                destructive=True,
-                reason="This command may delete files or folders.",
-            )
-
-        if any(token in normalized for token in ("&&", "||", ";")):
-            return cls._build_tool_policy(
-                level="high",
-                reason="This is a chained shell command, which is harder to predict and review.",
-            )
-
-        if any(token in normalized for token in (">", ">>")):
-            return cls._build_tool_policy(
-                level="high",
-                reason="This command writes output through shell redirection.",
-            )
-
-        for pattern in cls.HIGH_RISK_COMMAND_PATTERNS:
-            if pattern in normalized:
-                return cls._build_tool_policy(
-                    level="high",
-                    reason=f"This command changes the environment or repository state: `{pattern}`.",
-                )
-
-        for pattern in cls.SAFE_COMMAND_PATTERNS:
-            if re.search(pattern, normalized):
-                return cls._build_tool_policy(
-                    level="low",
-                    approval_required=False,
-                    reason=f"This looks like a read-only or validation command in `{cwd}`.",
-                )
-
-        return cls._build_tool_policy(
-            level="medium",
-            reason=f"This command runs arbitrary shell code in `{cwd}` and should be reviewed once.",
-        )
-
-    @classmethod
-    def _tool_policy(
-        cls,
-        name: str,
-        args: dict[str, Any],
-        display_args: dict[str, Any],
-        preview_text: str | None,
-    ) -> dict[str, Any]:
-        if name in cls.INSPECTION_TOOLS:
-            return cls._build_tool_policy(
-                level="safe",
-                approval_required=False,
-                reason="This tool only reads workspace state.",
-            )
-
-        if name == "run_command":
-            return cls._command_tool_policy(args, display_args)
-
-        if name == "apply_patch":
-            patch_info = display_args if isinstance(display_args, dict) else {}
-            files_touched = [str(path) for path in patch_info.get("files_touched", [])]
-            file_count = int(patch_info.get("file_count", 0) or 0)
-            added, removed = cls._patch_change_counts(str(preview_text or args.get("patch") or ""))
-            total_changed_lines = added + removed
-            if any(cls._is_sensitive_path(path) for path in files_touched):
-                return cls._build_tool_policy(
-                    level="high",
-                    reason="This patch touches a sensitive project or environment file.",
-                )
-            if file_count >= 5 or total_changed_lines >= 200:
-                return cls._build_tool_policy(
-                    level="high",
-                    reason=f"This patch changes {file_count} files and about {total_changed_lines} lines.",
-                )
-            if file_count >= 3 or total_changed_lines >= 80:
-                return cls._build_tool_policy(
-                    level="medium",
-                    reason=f"This patch changes multiple files or a larger diff ({total_changed_lines} lines).",
-                )
-            return cls._build_tool_policy(
-                level="low",
-                approval_required=False,
-                reason=f"This is a focused patch ({file_count} file, about {total_changed_lines} changed lines).",
-            )
-
-        if name == "write_file":
-            path = str(display_args.get("path") or args.get("path") or "")
-            exists = bool(display_args.get("exists", False))
-            line_count = int(display_args.get("line_count", 0) or 0)
-            if cls._is_sensitive_path(path):
-                return cls._build_tool_policy(
-                    level="high",
-                    reason=f"This overwrites sensitive file `{path}`.",
-                )
-            if exists and line_count >= 200:
-                return cls._build_tool_policy(
-                    level="high",
-                    reason=f"This fully overwrites existing file `{path}` with {line_count} lines.",
-                )
-            if exists:
-                return cls._build_tool_policy(
-                    level="medium",
-                    reason=f"This fully overwrites existing file `{path}`.",
-                )
-            return cls._build_tool_policy(
-                level="low",
-                approval_required=False,
-                reason=f"This creates a new file `{path}`.",
-            )
-
-        if name == "rename_path":
-            source_path = str(display_args.get("source_path") or args.get("source_path") or "")
-            target_path = str(display_args.get("target_path") or args.get("target_path") or "")
-            item_type = str(display_args.get("item_type") or "item")
-            if item_type == "directory":
-                return cls._build_tool_policy(
-                    level="high",
-                    reason=f"This renames a directory: `{source_path}` -> `{target_path}`.",
-                )
-            if cls._is_sensitive_path(source_path) or cls._is_sensitive_path(target_path):
-                return cls._build_tool_policy(
-                    level="high",
-                    reason="This rename touches a sensitive path.",
-                )
-            return cls._build_tool_policy(
-                level="medium",
-                reason=f"This renames file `{source_path}` -> `{target_path}`.",
-            )
-
-        if name == "copy_path":
-            source_path = str(display_args.get("source_path") or args.get("source_path") or "")
-            target_path = str(display_args.get("target_path") or args.get("target_path") or "")
-            item_type = str(display_args.get("item_type") or "item")
-            item_count = int(display_args.get("item_count", 0) or 0)
-            if item_type == "directory" or item_count >= 50:
-                return cls._build_tool_policy(
-                    level="medium",
-                    reason=f"This copies a larger tree from `{source_path}` to `{target_path}`.",
-                )
-            return cls._build_tool_policy(
-                level="low",
-                approval_required=False,
-                reason=f"This copies `{source_path}` to `{target_path}`.",
-            )
-
-        if name == "delete_path":
-            path = str(display_args.get("path") or args.get("path") or "")
-            item_type = str(display_args.get("item_type") or "item")
-            item_count = int(display_args.get("item_count", 0) or 0)
-            if item_type == "directory" and (item_count >= 20 or cls._is_sensitive_path(path)):
-                return cls._build_tool_policy(
-                    level="critical",
-                    destructive=True,
-                    reason=f"This deletes directory `{path}` with {item_count} items.",
-                )
-            return cls._build_tool_policy(
-                level="high",
-                destructive=True,
-                reason=f"This deletes {item_type} `{path}`.",
-            )
-
-        if name == "make_directory":
-            path = str(display_args.get("path") or args.get("path") or "")
-            if cls._is_sensitive_path(path):
-                return cls._build_tool_policy(
-                    level="medium",
-                    reason=f"This creates or reuses a sensitive directory path `{path}`.",
-                )
-            return cls._build_tool_policy(
-                level="low",
-                approval_required=False,
-                reason=f"This creates directory `{path}`.",
-            )
-
-        if name in {"rollback_last_change", "rollback_change"}:
-            path_count = int(display_args.get("path_count", 0) or 0)
-            superseded = int(display_args.get("superseded_active_count", 0) or 0)
-            if superseded > 0 or path_count >= 4:
-                return cls._build_tool_policy(
-                    level="medium",
-                    reason="This rollback can replace several newer workspace changes.",
-                )
-            return cls._build_tool_policy(
-                level="low",
-                approval_required=False,
-                reason="This rollback restores the last recorded workspace state.",
-            )
-
-        return cls._build_tool_policy(
-            level="medium",
-            reason="This tool changes workspace state.",
-        )
-
-    @classmethod
     def _paths_touched_by_tool(cls, name: str, result: dict[str, Any]) -> list[str]:
         if not isinstance(result, dict):
             return []
@@ -815,595 +356,163 @@ class CodeAgent:
             return [str(result["path"])] if result.get("path") else []
         return []
 
-    @staticmethod
-    def _shell_command(parts: list[str]) -> str:
-        return subprocess.list2cmdline(parts)
-
-    def _workspace_path_exists(self, relative_path: str, base: Path | None = None) -> bool:
-        root = base or self.workspace.root
-        return (root / relative_path).exists()
-
-    def _read_workspace_text(
-        self,
-        relative_path: str,
-        limit: int = 20000,
-        base: Path | None = None,
-    ) -> str:
-        root = base or self.workspace.root
-        path = root / relative_path
-        if not path.exists() or not path.is_file():
-            return ""
-        try:
-            return path.read_text(encoding="utf-8")[:limit]
-        except Exception:
-            return ""
-
-    def _normalize_changed_path(self, raw_path: str) -> Path:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = (self.workspace.root / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-        return candidate
-
-    def _candidate_project_roots(self, changed_paths: set[str]) -> list[Path]:
-        candidates: list[Path] = []
-        for raw_path in sorted(path for path in changed_paths if path):
-            current = self._normalize_changed_path(raw_path)
-            if current.suffix:
-                current = current.parent
-            while True:
-                if current == self.workspace.root or self.workspace.root in current.parents:
-                    if current not in candidates:
-                        candidates.append(current)
-                if current == self.workspace.root:
-                    break
-                current = current.parent
-        if self.workspace.root not in candidates:
-            candidates.append(self.workspace.root)
-        candidates.sort(key=lambda path: len(path.parts), reverse=True)
-        return candidates
-
-    def _find_project_root(self, changed_paths: set[str], markers: tuple[str, ...]) -> Path | None:
-        for candidate in self._candidate_project_roots(changed_paths):
-            if any((candidate / marker).exists() for marker in markers):
-                return candidate
-        return None
-
-    def _package_json_scripts(self, project_root: Path) -> dict[str, Any]:
-        package_json = project_root / "package.json"
-        if not package_json.exists():
-            return {}
-        try:
-            data = json.loads(package_json.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        scripts = data.get("scripts")
-        return scripts if isinstance(scripts, dict) else {}
-
-    def _detect_validation_project(self, changed_paths: set[str]) -> tuple[str, Path | None]:
-        suffixes = {Path(path).suffix.lower() for path in changed_paths if path}
-        node_root = self._find_project_root(changed_paths, ("package.json",))
-        if node_root is not None:
-            return "node", node_root
-        python_root = self._find_project_root(
-            changed_paths,
-            ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"),
-        )
-        if (
-            python_root is not None
-            or ".py" in suffixes
-        ):
-            return "python", python_root
-        rust_root = self._find_project_root(changed_paths, ("Cargo.toml",))
-        if rust_root is not None:
-            return "rust", rust_root
-        go_root = self._find_project_root(changed_paths, ("go.mod",))
-        if go_root is not None:
-            return "go", go_root
-        java_root = self._find_project_root(changed_paths, ("pom.xml", "build.gradle", "build.gradle.kts"))
-        if (
-            java_root is not None
-        ):
-            return "java", java_root
-        cpp_root = self._find_project_root(changed_paths, ("CMakeLists.txt", "Makefile"))
-        if (
-            cpp_root is not None
-            or suffixes.intersection({".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"})
-        ):
-            return "cpp", cpp_root
-        if suffixes and suffixes.issubset({".md", ".txt", ".rst", ".json", ".yml", ".yaml", ".toml"}):
-            return "docs", None
-        return "generic", None
-
-    def _python_validation_commands(
-        self,
-        changed_paths: set[str],
-        project_root: Path | None,
-    ) -> list[dict[str, Any]]:
-        commands: list[dict[str, Any]] = []
-        command_cwd = self.workspace._rel(project_root) if project_root is not None else "."
-        changed_py_files = sorted(
-            str(self._normalize_changed_path(path))
-            for path in changed_paths
-            if Path(path).suffix.lower() == ".py"
-        )[:20]
-        if changed_py_files:
-            commands.append(
-                {
-                    "label": "Python syntax check",
-                    "reason": "Compile the changed Python files to catch syntax errors quickly.",
-                    "command": self._shell_command(
-                        [sys.executable, "-m", "py_compile", *changed_py_files]
-                    ),
-                    "cwd": command_cwd,
-                    "timeout_ms": 120000,
-                }
-            )
-        else:
-            compile_targets: list[str] = []
-            search_root = project_root or self.workspace.root
-            if self._workspace_path_exists("main.py", base=search_root):
-                compile_targets.append(str((search_root / "main.py").resolve()))
-            for candidate in ("kagent", "src", "app", "tests"):
-                if self._workspace_path_exists(candidate, base=search_root):
-                    compile_targets.append(str((search_root / candidate).resolve()))
-            if not compile_targets:
-                compile_targets.append(str(search_root.resolve()))
-            commands.append(
-                {
-                    "label": "Python compileall",
-                    "reason": "Compile the Python entrypoints and packages when no direct .py file list is available.",
-                    "command": self._shell_command(
-                        [sys.executable, "-m", "compileall", *compile_targets[:6]]
-                    ),
-                    "cwd": command_cwd,
-                    "timeout_ms": 120000,
-                }
-            )
-
-        search_root = project_root or self.workspace.root
-        has_pytest = (
-            self._workspace_path_exists("tests", base=search_root)
-            or self._workspace_path_exists("pytest.ini", base=search_root)
-            or self._workspace_path_exists("tox.ini", base=search_root)
-            or "[tool.pytest" in self._read_workspace_text("pyproject.toml", base=search_root).lower()
-        )
-        if has_pytest:
-            commands.append(
-                {
-                    "label": "Pytest suite",
-                    "reason": "Run the test suite after the lightweight syntax validation.",
-                    "command": self._shell_command([sys.executable, "-m", "pytest", "-q"]),
-                    "cwd": command_cwd,
-                    "timeout_ms": 240000,
-                }
-            )
-        return commands[: self.MAX_VALIDATION_PLAN_COMMANDS]
-
-    def _node_validation_commands(self, project_root: Path) -> list[dict[str, Any]]:
-        scripts = self._package_json_scripts(project_root)
-        if not scripts:
-            return []
-        command_cwd = self.workspace._rel(project_root)
-        package_manager = "npm"
-        if self._workspace_path_exists("pnpm-lock.yaml", base=project_root):
-            package_manager = "pnpm"
-        elif self._workspace_path_exists("yarn.lock", base=project_root):
-            package_manager = "yarn"
-
-        script_priority = [
-            ("typecheck", "Type check", 180000),
-            ("lint", "Lint", 180000),
-            ("test", "Test suite", 240000),
-            ("build", "Build", 240000),
-        ]
-        commands: list[dict[str, Any]] = []
-        for script_name, label, timeout_ms in script_priority:
-            if script_name not in scripts:
-                continue
-            commands.append(
-                {
-                    "label": label,
-                    "reason": f"Run the `{script_name}` script declared in package.json.",
-                    "command": f"{package_manager} run {script_name}",
-                    "cwd": command_cwd,
-                    "timeout_ms": timeout_ms,
-                }
-            )
-        return commands[: self.MAX_VALIDATION_PLAN_COMMANDS]
-
-    def _build_validation_plan(self, changed_paths: set[str]) -> dict[str, Any]:
-        project_type, project_root = self._detect_validation_project(changed_paths)
-        changed_list = sorted(str(path) for path in changed_paths if path)
-        commands: list[dict[str, Any]]
-
-        if project_type == "python":
-            commands = self._python_validation_commands(changed_paths, project_root)
-        elif project_type == "node":
-            commands = self._node_validation_commands(project_root or self.workspace.root)
-        elif project_type == "rust":
-            commands = [
-                {
-                    "label": "Cargo check",
-                    "reason": "Run a fast Rust compile check.",
-                    "command": "cargo check",
-                    "cwd": self.workspace._rel(project_root) if project_root is not None else ".",
-                    "timeout_ms": 240000,
-                }
-            ]
-        elif project_type == "go":
-            commands = [
-                {
-                    "label": "Go test",
-                    "reason": "Run the Go package tests for the workspace.",
-                    "command": "go test ./...",
-                    "cwd": self.workspace._rel(project_root) if project_root is not None else ".",
-                    "timeout_ms": 240000,
-                }
-            ]
-        else:
-            commands = []
-
-        if commands:
-            summary = (
-                f"Detected a {project_type} project and prepared {len(commands)} validation command"
-                f"{'s' if len(commands) != 1 else ''}. First step: {commands[0]['label']}."
-            )
-        elif project_type == "docs":
-            summary = (
-                "No meaningful automatic validation command was selected because the changes look like "
-                "documentation or config-only edits."
-            )
-        else:
-            summary = (
-                "No safe automatic validation command was detected for this project layout. "
-                "The final answer should explain that validation was not available."
-            )
-
-        return {
-            "project_type": project_type,
-            "summary": summary,
-            "changed_paths": changed_list[:12],
-            "project_root": self.workspace._rel(project_root) if project_root is not None else ".",
-            "commands": commands,
-            "command_count": len(commands),
-        }
-
-    def _validation_prompt(
-        self,
-        changed_paths: set[str],
-        plan: dict[str, Any] | None = None,
-    ) -> str:
-        files = ", ".join(sorted(changed_paths)[:8]) if changed_paths else "the changed files"
-        if not isinstance(plan, dict):
-            return (
-                "You changed workspace files and are about to finish. "
-                f"Before the final answer, run at least one validation command for {files}. "
-                "Choose the most relevant lightweight check for the project and the edited files. "
-                "If no meaningful validation exists, explicitly explain why."
-            )
-
-        commands = plan.get("commands") if isinstance(plan.get("commands"), list) else []
-        if not commands:
-            return (
-                f"No safe automatic validation command was found for {files}. "
-                "Explain that limitation explicitly in the final answer."
-            )
-        command_lines = []
-        for idx, command_info in enumerate(commands, start=1):
-            if not isinstance(command_info, dict):
-                continue
-            command_lines.append(
-                f"{idx}. {command_info.get('label')}: `{command_info.get('command')}`"
-            )
-        commands_text = "\n".join(command_lines)
-        return (
-            "You changed workspace files and are about to finish. "
-            f"Before the final answer, validate {files}.\n"
-            f"Detected project type: {plan.get('project_type', 'generic')}.\n"
-            "Prefer these commands in order:\n"
-            f"{commands_text}\n"
-            "If every command is unsuitable, explicitly explain why."
-        )
-
-    def _validation_failure_prompt(
-        self,
-        changed_paths: set[str],
-        summary: str | None,
-        plan: dict[str, Any] | None = None,
-        attempt: int = 1,
-    ) -> str:
-        files = ", ".join(sorted(changed_paths)[:8]) if changed_paths else "the changed files"
-        detail = f" Last validation summary: {summary}." if summary else ""
-        plan_text = ""
-        if isinstance(plan, dict):
-            commands = plan.get("commands") if isinstance(plan.get("commands"), list) else []
-            command_lines = []
-            for idx, command_info in enumerate(commands, start=1):
-                if not isinstance(command_info, dict):
-                    continue
-                command_lines.append(
-                    f"{idx}. {command_info.get('label')}: `{command_info.get('command')}`"
-                )
-            if command_lines:
-                plan_text = (
-                    "\nUse the validation plan again after fixing the issue:\n"
-                    + "\n".join(command_lines)
-                )
-        return (
-            f"The last validation failed after you changed workspace files.{detail} "
-            f"This is repair attempt {attempt} of {self.MAX_VALIDATION_REPAIR_ROUNDS}. "
-            "Inspect the failure, fix the real issue, and validate again before finishing. "
-            f"Focus on {files}.{plan_text}"
-        )
-
-    @staticmethod
-    def _json_block(data: Any, limit: int = 3500) -> str:
-        text = json.dumps(data, ensure_ascii=False, indent=2)
-        truncated = False
-        if len(text) > limit:
-            text = text[:limit] + "\n... (truncated)"
-            truncated = True
-        return f"```json\n{text}\n```" + ("\n" if truncated else "")
-
-    @staticmethod
-    def _text_block(text: str, limit: int = 4500) -> str:
-        truncated = False
-        if len(text) > limit:
-            text = text[:limit] + "\n... (truncated)"
-            truncated = True
-        return f"```text\n{text}\n```" + ("\n" if truncated else "")
-
-    def _tool_display_args(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if name == "write_file":
-            preview = self.workspace.preview_write_file(
-                path=str(args["path"]),
-                content=str(args["content"]),
-            )
-            return {
-                "path": preview["path"],
-                "exists": preview["exists"],
-                "bytes_written": preview["bytes_written"],
-                "line_count": preview["line_count"],
-                "preview_truncated": preview["preview_truncated"],
-            }
-
-        if name == "run_command":
-            preview = self.workspace.preview_command(
-                command=str(args["command"]),
-                cwd=args.get("cwd"),
-                timeout_ms=int(args.get("timeout_ms", 120000)),
-            )
-            return {
-                "command": preview["command"],
-                "cwd": preview["cwd"],
-                "timeout_ms": preview["timeout_ms"],
-            }
-
-        if name == "rename_path":
-            preview = self.workspace.preview_rename_path(
-                source_path=str(args["source_path"]),
-                target_path=str(args["target_path"]),
-            )
-            return {
-                "source_path": preview["source_path"],
-                "target_path": preview["target_path"],
-                "item_type": preview["item_type"],
-            }
-
-        if name == "copy_path":
-            preview = self.workspace.preview_copy_path(
-                source_path=str(args["source_path"]),
-                target_path=str(args["target_path"]),
-            )
-            return {
-                "source_path": preview["source_path"],
-                "target_path": preview["target_path"],
-                "item_type": preview["item_type"],
-                "item_count": preview["item_count"],
-                "item_count_truncated": preview["item_count_truncated"],
-            }
-
-        if name == "delete_path":
-            preview = self.workspace.preview_delete_path(
-                path=str(args["path"]),
-                recursive=bool(args.get("recursive", True)),
-            )
-            return {
-                "path": preview["path"],
-                "item_type": preview["item_type"],
-                "recursive": preview["recursive"],
-                "item_count": preview["item_count"],
-                "item_count_truncated": preview["item_count_truncated"],
-            }
-
-        if name == "make_directory":
-            preview = self.workspace.preview_make_directory(
-                path=str(args["path"]),
-            )
-            return {
-                "path": preview["path"],
-                "exists": preview["exists"],
-            }
-
-        if name == "list_rollback_history":
-            limit = int(args.get("limit", 12))
-            include_inactive = bool(args.get("include_inactive", True))
-            return {
-                "limit": limit,
-                "include_inactive": include_inactive,
-            }
-
-        if name == "preview_rollback_change":
-            preview = self.workspace.preview_rollback_change(
-                rollback_id=int(args["rollback_id"]),
-            )
-            return {
-                "rollback_id": preview["rollback_id"],
-                "source_tool": preview["source_tool"],
-                "created_at": preview["created_at"],
-                "status": preview["status"],
-                "available": preview["available"],
-                "path_count": preview["path_count"],
-                "paths": preview["paths"][:12],
-                "paths_truncated": len(preview["paths"]) > 12,
-                "preview_truncated": preview["preview_truncated"],
-                "superseded_active_count": preview["superseded_active_count"],
-            }
-
-        if name == "rollback_last_change":
-            preview = self.workspace.preview_rollback_last_change()
-            return {
-                "rollback_id": preview["rollback_id"],
-                "source_tool": preview["source_tool"],
-                "created_at": preview["created_at"],
-                "status": preview["status"],
-                "available": preview["available"],
-                "path_count": preview["path_count"],
-                "paths": preview["paths"][:12],
-                "paths_truncated": len(preview["paths"]) > 12,
-            }
-
-        if name == "rollback_change":
-            preview = self.workspace.preview_rollback_change(
-                rollback_id=int(args["rollback_id"]),
-            )
-            return {
-                "rollback_id": preview["rollback_id"],
-                "source_tool": preview["source_tool"],
-                "created_at": preview["created_at"],
-                "status": preview["status"],
-                "available": preview["available"],
-                "path_count": preview["path_count"],
-                "paths": preview["paths"][:12],
-                "paths_truncated": len(preview["paths"]) > 12,
-                "superseded_active_count": preview["superseded_active_count"],
-            }
-
-        if name != "apply_patch":
-            return args
-
-        patch = str(args.get("patch") or "")
-        if not patch.strip():
-            return {
-                "patch_bytes": 0,
-                "patch_lines": 0,
-                "file_count": 0,
-                "files_touched": [],
-            }
-        return self.workspace.preview_patch(patch)
-
-    def _tool_preview_text(self, name: str, args: dict[str, Any]) -> str | None:
-        if name == "apply_patch":
-            patch = str(args.get("patch") or "")
-            return patch or None
-        if name == "write_file":
-            preview = self.workspace.preview_write_file(
-                path=str(args["path"]),
-                content=str(args["content"]),
-            )
-            return str(preview["preview"])
-        if name == "run_command":
-            preview = self.workspace.preview_command(
-                command=str(args["command"]),
-                cwd=args.get("cwd"),
-                timeout_ms=int(args.get("timeout_ms", 120000)),
-            )
-            return str(preview["preview"])
-        if name == "rename_path":
-            preview = self.workspace.preview_rename_path(
-                source_path=str(args["source_path"]),
-                target_path=str(args["target_path"]),
-            )
-            return str(preview["preview"])
-        if name == "copy_path":
-            preview = self.workspace.preview_copy_path(
-                source_path=str(args["source_path"]),
-                target_path=str(args["target_path"]),
-            )
-            return str(preview["preview"])
-        if name == "delete_path":
-            preview = self.workspace.preview_delete_path(
-                path=str(args["path"]),
-                recursive=bool(args.get("recursive", True)),
-            )
-            return str(preview["preview"])
-        if name == "make_directory":
-            preview = self.workspace.preview_make_directory(
-                path=str(args["path"]),
-            )
-            return str(preview["preview"])
-        if name == "list_rollback_history":
-            history = self.workspace.list_rollback_history(
-                limit=int(args.get("limit", 12)),
-                include_inactive=bool(args.get("include_inactive", True)),
-            )
-            return str(history["preview"])
-        if name == "preview_rollback_change":
-            preview = self.workspace.preview_rollback_change(
-                rollback_id=int(args["rollback_id"]),
-            )
-            return str(preview["preview"])
-        if name == "rollback_last_change":
-            preview = self.workspace.preview_rollback_last_change()
-            return str(preview["preview"])
-        if name == "rollback_change":
-            preview = self.workspace.preview_rollback_change(
-                rollback_id=int(args["rollback_id"]),
-            )
-            return str(preview["preview"])
-        return None
-
-    def _tool_report_section(
-        self,
-        name: str,
-        args: dict[str, Any],
-        result: dict[str, Any],
-        preview: str | None = None,
-        policy: dict[str, Any] | None = None,
-    ) -> str:
-        parts = [
-            f"#### `{name}`",
-            "",
-            "**输入**",
-            "",
-            self._json_block(args),
-        ]
-        if policy:
-            parts.extend(
-                [
-                    "**Policy**",
-                    "",
-                    self._json_block(
-                        {
-                            "risk_level": policy.get("risk_level"),
-                            "approval_required": policy.get("approval_required"),
-                            "destructive": policy.get("destructive"),
-                            "reason": policy.get("reason"),
-                        }
-                    ),
-                ]
-            )
-        if preview:
-            parts.extend(["**预览**", "", f"```diff\n{preview}\n```", ""])
-        parts.extend(
-            [
-                "**结果**",
-                "",
-                self._json_block(result),
-            ]
-        )
-        return "\n".join(parts)
-
     def _emit(self, emit: EmitFn | None, parts: list[str], text: str) -> None:
+        text = _normalize_display_text(text)
         parts.append(text)
         if emit:
             emit(text)
 
     def _emit_event(self, on_event: EventFn | None, event: dict[str, Any]) -> None:
+        if self.run_logger is not None:
+            self.run_logger.write(str(event.get("type") or "event"), event)
         if on_event:
             on_event(event)
+
+    def _finish_run_log(self, status: str, data: dict[str, Any] | None = None) -> None:
+        if self.run_logger is None or self._run_log_finished:
+            return
+        self._run_log_finished = True
+        self.run_logger.finish(status, data)
+
+    @staticmethod
+    def _run_state_payload(state: AgentRunState) -> dict[str, Any]:
+        return {
+            "phase": state.phase.value,
+            "inspected": state.inspected,
+            "mutated": state.mutated,
+            "content_changed": state.content_changed,
+            "validated": state.validated,
+            "validation_failed": state.validation_failed,
+            "changed_paths": sorted(state.changed_paths or []),
+            "last_validation_summary": state.last_validation_summary,
+            "plan": plan_to_dicts(state.plan or []),
+            "focused_validation_commands": state.focused_validation_commands or [],
+            "tool_call_history": state.tool_call_history or [],
+        }
+
+    def _record_tool_loop_guard(
+        self,
+        state: AgentRunState,
+        *,
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+        ok: bool,
+        messages: list[dict[str, Any]],
+        on_event: EventFn | None,
+        round_idx: int,
+    ) -> None:
+        history = state.tool_call_history if state.tool_call_history is not None else []
+        state.tool_call_history = history
+        warning = record_tool_call(
+            history,
+            name=name,
+            args=args,
+            ok=ok,
+            summary=str(
+                result.get("summary")
+                or result.get("error")
+                or result.get("stderr")
+                or result.get("stdout")
+                or ""
+            ).strip()[:500],
+        )
+        if not warning:
+            return
+        self._emit_event(
+            on_event,
+            {
+                "type": "tool_loop_warning",
+                "warning": warning,
+                "round": round_idx,
+            },
+        )
+        prompt = loop_warning_prompt(warning)
+        if prompt:
+            messages.append({"role": "system", "content": prompt})
+
+    def _set_plan_step(
+        self,
+        state: AgentRunState,
+        step_id: str,
+        status: PlanStatus,
+        on_event: EventFn | None,
+        *,
+        detail: str | None = None,
+        force: bool = False,
+    ) -> None:
+        changed = set_plan_step(state.plan or [], step_id, status, detail)
+        if not changed and not force:
+            return
+        self._emit_event(
+            on_event,
+            {
+                "type": "agent_plan",
+                "step_id": step_id,
+                "status": status,
+                "detail": detail,
+                "plan": plan_to_dicts(state.plan or []),
+            },
+        )
+
+    def _set_plan_for_tool(
+        self,
+        state: AgentRunState,
+        name: str,
+        status: PlanStatus,
+        on_event: EventFn | None,
+        *,
+        detail: str | None = None,
+    ) -> None:
+        if name in self.INSPECTION_TOOLS:
+            self._set_plan_step(state, "inspect_context", status, on_event, detail=detail)
+        elif name in self.MUTATION_TOOLS:
+            self._set_plan_step(state, "make_changes", status, on_event, detail=detail)
+        elif name in self.VALIDATION_TOOLS:
+            self._set_plan_step(state, "validate_changes", status, on_event, detail=detail)
+
+    def _set_phase(
+        self,
+        state: AgentRunState,
+        phase: AgentPhase,
+        on_event: EventFn | None,
+        *,
+        detail: str | None = None,
+        force: bool = False,
+    ) -> None:
+        if state.phase == phase and not force:
+            return
+        state.phase = phase
+        event: dict[str, Any] = {
+            "type": "agent_status",
+            "phase": phase.value,
+            "status": PHASE_STATUS_LABELS[phase],
+            "kind": "active",
+        }
+        if detail:
+            event["detail"] = detail
+        self._emit_event(on_event, event)
+
+    @staticmethod
+    def _final_response_prompt(state: AgentRunState) -> str:
+        changed_paths = sorted(state.changed_paths or [])
+        changed_text = ", ".join(changed_paths[:12]) if changed_paths else "none"
+        validation_status = "not run"
+        if state.validated:
+            validation_status = "failed" if state.validation_failed else "passed"
+        summary = state.last_validation_summary or "none"
+        return (
+            "Prepare the final user-facing answer from the actual execution state.\n"
+            f"- inspected_project: {state.inspected}\n"
+            f"- mutated_workspace: {state.mutated}\n"
+            f"- content_changed: {state.content_changed}\n"
+            f"- changed_paths: {changed_text}\n"
+            f"- validation_status: {validation_status}\n"
+            f"- last_validation_summary: {summary}\n"
+            f"- plan_status: {plan_summary_text(state.plan or [])}\n\n"
+            "Keep it concise. State what changed, what validation ran, and any remaining risk. "
+            "Do not claim validation passed if validation_status is not passed."
+        )
 
     @staticmethod
     def _append_synthetic_tool_call(
@@ -1445,9 +554,15 @@ class CodeAgent:
         if append_assistant_stub:
             self._append_synthetic_tool_call(messages, call_id, name, args)
 
-        display_args = self._tool_display_args(name, args)
-        preview_text = self._tool_preview_text(name, args)
-        policy = self._tool_policy(name, args, display_args, preview_text)
+        display_args = tool_display_args(self.workspace, name, args)
+        preview_text = tool_preview_text(self.workspace, name, args)
+        policy = tool_policy(name, args, display_args, preview_text)
+        change_plan = build_change_plan(
+            name,
+            display_args,
+            preview=preview_text,
+            policy=policy,
+        )
         self._emit_event(
             on_event,
             {
@@ -1469,6 +584,17 @@ class CodeAgent:
                     "args": display_args,
                     "preview": preview_text,
                     "policy": policy,
+                    "round": round_idx,
+                },
+            )
+        if change_plan:
+            self._emit_event(
+                on_event,
+                {
+                    "type": "change_plan",
+                    "call_id": call_id,
+                    "name": name,
+                    "plan": change_plan,
                     "round": round_idx,
                 },
             )
@@ -1499,11 +625,14 @@ class CodeAgent:
                 result = {"ok": False, "error": str(exc)}
 
         result_ok = self._tool_result_ok(name, result)
+        if change_plan:
+            result = dict(result)
+            result["change_plan"] = change_plan
         messages.append(
             {
                 "role": "tool",
                 "tool_call_id": call_id,
-                "content": json.dumps(result, ensure_ascii=False),
+                "content": tool_result_json_for_model(name, result),
             }
         )
         self._emit_event(
@@ -1522,15 +651,76 @@ class CodeAgent:
         self._emit(
             emit,
             report_parts,
-            self._tool_report_section(
+            tool_report_section(
                 name,
                 display_args,
                 result,
                 preview=preview_text,
                 policy=policy,
+                change_plan=change_plan,
             ),
         )
+        if name == "apply_patch" and not result_ok:
+            self._recover_failed_patch(
+                result=result,
+                change_plan=change_plan,
+                call_id=call_id,
+                round_idx=round_idx,
+                messages=messages,
+                report_parts=report_parts,
+                emit=emit,
+                on_event=on_event,
+            )
         return result, result_ok, display_args, preview_text
+
+    def _recover_failed_patch(
+        self,
+        *,
+        result: dict[str, Any],
+        change_plan: dict[str, Any] | None,
+        call_id: str,
+        round_idx: int,
+        messages: list[dict[str, Any]],
+        report_parts: list[str],
+        emit: EmitFn | None,
+        on_event: EventFn | None,
+    ) -> None:
+        recovery = patch_failure_recovery(result, change_plan=change_plan)
+        if not recovery:
+            return
+        targets = recovery.get("read_targets") if isinstance(recovery.get("read_targets"), list) else []
+        self._emit_event(
+            on_event,
+            {
+                "type": "patch_recovery",
+                "call_id": call_id,
+                "recovery": recovery,
+                "round": round_idx,
+            },
+        )
+        for idx, target in enumerate(targets, start=1):
+            if not isinstance(target, dict) or not target.get("path"):
+                continue
+            args = {
+                "path": str(target["path"]),
+                "start_line": int(target.get("start_line") or 1),
+                "end_line": int(target.get("end_line") or 220),
+                "max_chars": int(target.get("max_chars") or 20000),
+            }
+            self._execute_tool_action(
+                call_id=f"{call_id}-patch-recovery-{idx}",
+                name="read_file",
+                args=args,
+                round_idx=round_idx,
+                messages=messages,
+                report_parts=report_parts,
+                emit=emit,
+                on_event=on_event,
+                append_assistant_stub=True,
+            )
+        prompt = patch_recovery_prompt(recovery)
+        if prompt:
+            messages.append({"role": "system", "content": prompt})
 
     def _emit_validation_plan(
         self,
@@ -1566,7 +756,7 @@ class CodeAgent:
         self._emit(
             emit,
             report_parts,
-            self._tool_report_section("validation_plan", args, result),
+            tool_report_section("validation_plan", args, result),
         )
 
     def _run_auto_validation(
@@ -1575,6 +765,7 @@ class CodeAgent:
         plan: dict[str, Any],
         validation_run_seq: int,
         round_idx: int,
+        state: AgentRunState,
         messages: list[dict[str, Any]],
         report_parts: list[str],
         emit: EmitFn | None,
@@ -1584,13 +775,10 @@ class CodeAgent:
         if not commands:
             return True, str(plan.get("summary") or "").strip() or None, 0
 
-        self._emit_event(
+        self._set_phase(
+            state,
+            AgentPhase.VALIDATING,
             on_event,
-            {
-                "type": "agent_status",
-                "status": "Validating",
-                "kind": "active",
-            },
         )
 
         last_summary: str | None = None
@@ -1616,34 +804,132 @@ class CodeAgent:
                 on_event=on_event,
                 append_assistant_stub=True,
             )
-            last_summary = str(
-                result.get("summary")
-                or result.get("error")
-                or result.get("stderr")
-                or result.get("stdout")
-                or command_info.get("label")
-                or ""
-            ).strip() or None
+            self._record_tool_loop_guard(
+                state,
+                name="run_command",
+                args=args,
+                result=result,
+                ok=result_ok,
+                messages=messages,
+                on_event=on_event,
+                round_idx=round_idx,
+            )
+            last_summary = validation_result_summary(result, command_info)
             if not result_ok:
-                self._emit_event(
+                diagnostics = extract_failure_diagnostics(result)
+                state.focused_validation_commands = build_focused_validation_commands(
+                    diagnostics,
+                    base_command=command_info,
+                )
+                if state.focused_validation_commands:
+                    self._emit_event(
+                        on_event,
+                        {
+                            "type": "focused_validation_plan",
+                            "commands": state.focused_validation_commands,
+                            "round": round_idx,
+                        },
+                    )
+                focus_targets = self._read_failure_focus(
+                    result=result,
+                    validation_run_seq=validation_run_seq,
+                    command_idx=idx,
+                    round_idx=round_idx,
+                    state=state,
+                    messages=messages,
+                    report_parts=report_parts,
+                    emit=emit,
+                    on_event=on_event,
+                )
+                prompt = focus_prompt(focus_targets)
+                if prompt:
+                    messages.append({"role": "system", "content": prompt})
+                self._set_phase(
+                    state,
+                    AgentPhase.REPAIRING,
                     on_event,
-                    {
-                        "type": "agent_status",
-                        "status": "Repairing",
-                        "kind": "active",
-                    },
                 )
                 return False, last_summary, executed
 
+        self._set_phase(
+            state,
+            AgentPhase.VALIDATING,
+            on_event,
+            detail="Validation completed",
+            force=True,
+        )
+        return True, last_summary, executed
+
+    def _read_failure_focus(
+        self,
+        *,
+        result: dict[str, Any],
+        validation_run_seq: int,
+        command_idx: int,
+        round_idx: int,
+        state: AgentRunState,
+        messages: list[dict[str, Any]],
+        report_parts: list[str],
+        emit: EmitFn | None,
+        on_event: EventFn | None,
+    ) -> list[dict[str, Any]]:
+        diagnostics = extract_failure_diagnostics(result)
+        targets = focus_targets_from_diagnostics(diagnostics)
+        if not targets:
+            return []
+
+        self._set_phase(
+            state,
+            AgentPhase.INSPECTING,
+            on_event,
+            detail="Reading focused failure locations",
+            force=True,
+        )
+        self._set_plan_step(
+            state,
+            "inspect_context",
+            "active",
+            on_event,
+            detail="Reading focused failure locations",
+        )
         self._emit_event(
             on_event,
             {
-                "type": "agent_status",
-                "status": "Validated",
-                "kind": "active",
+                "type": "failure_focus",
+                "diagnostics": diagnostics,
+                "targets": targets,
+                "round": round_idx,
             },
         )
-        return True, last_summary, executed
+
+        for idx, target in enumerate(targets, start=1):
+            args = {
+                "path": target["path"],
+                "start_line": target["start_line"],
+                "end_line": target["end_line"],
+                "max_chars": target["max_chars"],
+            }
+            read_result, read_ok, _, _ = self._execute_tool_action(
+                call_id=f"failure-focus-{validation_run_seq}-{command_idx}-{idx}",
+                name="read_file",
+                args=args,
+                round_idx=round_idx,
+                messages=messages,
+                report_parts=report_parts,
+                emit=emit,
+                on_event=on_event,
+                append_assistant_stub=True,
+            )
+            if read_ok:
+                state.inspected = True
+                self._set_plan_step(
+                    state,
+                    "inspect_context",
+                    "done",
+                    on_event,
+                    detail=f"Read failure focus `{read_result.get('path', target['path'])}`",
+                )
+        return targets
 
     def _dispatch_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "list_files":
@@ -1664,6 +950,22 @@ class CodeAgent:
                 context_lines=int(args.get("context_lines", 1)),
                 max_results=int(args.get("max_results", 50)),
             )
+        if name == "find_symbol":
+            kind = args.get("kind")
+            if kind is not None:
+                kind = str(kind)
+            return {
+                "query": str(args["query"]),
+                "kind": kind,
+                "exact": bool(args.get("exact", True)),
+                "matches": find_symbols(
+                    self.workspace.root,
+                    str(args["query"]),
+                    kind=kind,
+                    exact=bool(args.get("exact", True)),
+                    limit=int(args.get("limit", 50)),
+                ),
+            }
         if name == "read_file":
             return self.workspace.read_file(
                 path=str(args["path"]),
@@ -1732,6 +1034,8 @@ class CodeAgent:
     ) -> str:
         if not history:
             raise WorkspaceError("history is required")
+        self.run_logger = RunLogger(self.session_id, str(self.workspace.root))
+        self._run_log_finished = False
 
         user_task = ""
         for item in reversed(history):
@@ -1761,7 +1065,7 @@ class CodeAgent:
             }
         ]
         for item in history:
-            if item.get("role") in ("user", "assistant"):
+            if item.get("role") in ("system", "user", "assistant"):
                 messages.append(
                     {
                         "role": item["role"],
@@ -1775,15 +1079,18 @@ class CodeAgent:
         require_code_inspection = self._task_requires_code_edit(user_task)
         inspection_retry_forced = False
         validation_retry_forced = False
+        final_response_forced = False
         validation_repair_attempts = 0
         validation_plan_run_seq = 0
-        inspected = False
-        mutated = False
-        content_changed = False
-        validated = False
-        validation_failed = False
-        changed_paths: set[str] = set()
-        last_validation_summary: str | None = None
+        state = AgentRunState(
+            changed_paths=set(),
+            plan=build_task_plan(
+                user_task,
+                requires_tools=require_tools,
+                requires_code_edit=require_code_inspection,
+            ),
+        )
+        messages.append({"role": "system", "content": plan_for_model(state.plan or [])})
         validation_plan: dict[str, Any] | None = None
         validation_plan_announced = False
         self._emit_event(
@@ -1792,30 +1099,48 @@ class CodeAgent:
                 "type": "agent_start",
                 "task": user_task,
                 "workspace_root": str(self.workspace.root),
+                "run_id": self.run_logger.run_id if self.run_logger else None,
+                "run_log_path": str(self.run_logger.path) if self.run_logger else None,
+            },
+        )
+        self._emit_event(
+            on_event,
+            {
+                "type": "agent_plan",
+                "step_id": None,
+                "status": "created",
+                "plan": plan_to_dicts(state.plan or []),
             },
         )
         self._emit(
             emit,
             report_parts,
-            "### 任务\n\n"
+            "### 浠诲姟\n\n"
             f"{user_task}\n\n"
-            f"### 工作区\n\n`{self.workspace.root}`\n",
+            f"### 宸ヤ綔鍖篭n\n`{self.workspace.root}`\n",
         )
+
+        self._set_phase(state, AgentPhase.PLANNING, on_event)
 
         for round_idx in range(max_rounds):
             if should_stop and should_stop():
-                self._emit(emit, report_parts, "\n> 已中止\n")
+                self._set_phase(state, AgentPhase.STOPPED, on_event)
+                self._emit(emit, report_parts, "\n> 宸蹭腑姝n")
+                self._finish_run_log("stopped", self._run_state_payload(state))
                 return "".join(report_parts)
 
-            if content_changed and not validated:
+            if state.content_changed and not state.validated:
                 if validation_plan is None:
-                    validation_plan = self._build_validation_plan(changed_paths)
+                    validation_plan = build_validation_plan(
+                        changed_paths=state.changed_paths or set(),
+                        workspace=self.workspace,
+                    )
                 if not validation_plan_announced:
                     validation_plan_run_seq += 1
                     self._emit_validation_plan(
                         call_id=f"validation-plan-{validation_plan_run_seq}",
                         plan=validation_plan,
-                        changed_paths=changed_paths,
+                        changed_paths=state.changed_paths or set(),
                         round_idx=round_idx + 1,
                         report_parts=report_parts,
                         emit=emit,
@@ -1828,39 +1153,115 @@ class CodeAgent:
                     if isinstance(validation_plan.get("commands"), list)
                     else []
                 )
-                if plan_commands:
+                focused_commands = state.focused_validation_commands or []
+                if focused_commands:
+                    self._set_plan_step(
+                        state,
+                        "validate_changes",
+                        "active",
+                        on_event,
+                        detail="Running focused validation before full validation",
+                    )
                     validation_plan_run_seq += 1
                     ok, summary, executed = self._run_auto_validation(
-                        plan=validation_plan,
+                        plan={
+                            "summary": "Run focused validation for the last failure before the full validation plan.",
+                            "project_type": validation_plan.get("project_type", "focused"),
+                            "commands": focused_commands,
+                            "command_count": len(focused_commands),
+                        },
                         validation_run_seq=validation_plan_run_seq,
                         round_idx=round_idx + 1,
+                        state=state,
                         messages=messages,
                         report_parts=report_parts,
                         emit=emit,
                         on_event=on_event,
                     )
-                    validated = True
-                    validation_failed = not ok
-                    last_validation_summary = summary
+                    state.last_validation_summary = summary
+                    if not ok:
+                        state.validated = True
+                        state.validation_failed = True
+                        self._set_plan_step(
+                            state,
+                            "validate_changes",
+                            "failed",
+                            on_event,
+                            detail=summary,
+                        )
+                    else:
+                        state.focused_validation_commands = []
+                        state.validated = False
+                        state.validation_failed = False
+                        self._set_plan_step(
+                            state,
+                            "validate_changes",
+                            "active",
+                            on_event,
+                            detail="Focused validation passed; full validation still required",
+                        )
+                    if executed > 0:
+                        validation_retry_forced = True
+                    continue
+                if plan_commands:
+                    self._set_plan_step(
+                        state,
+                        "validate_changes",
+                        "active",
+                        on_event,
+                        detail="Running automatic validation",
+                    )
+                    validation_plan_run_seq += 1
+                    ok, summary, executed = self._run_auto_validation(
+                        plan=validation_plan,
+                        validation_run_seq=validation_plan_run_seq,
+                        round_idx=round_idx + 1,
+                        state=state,
+                        messages=messages,
+                        report_parts=report_parts,
+                        emit=emit,
+                        on_event=on_event,
+                    )
+                    state.validated = True
+                    state.validation_failed = not ok
+                    state.last_validation_summary = summary
+                    if ok:
+                        state.focused_validation_commands = []
+                    self._set_plan_step(
+                        state,
+                        "validate_changes",
+                        "done" if ok else "failed",
+                        on_event,
+                        detail=summary,
+                    )
                     if executed > 0:
                         validation_retry_forced = True
                     continue
 
-                validated = True
-                validation_failed = False
-                last_validation_summary = str(validation_plan.get("summary") or "").strip() or None
+                state.validated = True
+                state.validation_failed = False
+                state.last_validation_summary = str(validation_plan.get("summary") or "").strip() or None
+                self._set_plan_step(
+                    state,
+                    "validate_changes",
+                    "skipped",
+                    on_event,
+                    detail=state.last_validation_summary,
+                )
                 messages.append(
                     {
                         "role": "system",
-                        "content": self._validation_prompt(changed_paths, validation_plan),
+                        "content": validation_prompt(state.changed_paths or set(), validation_plan),
                     }
                 )
                 continue
 
+            self._set_phase(state, AgentPhase.PLANNING, on_event)
+            request_messages = self._prepare_model_messages(messages, on_event)
             response = client.chat.completions.create(
                 model=self.model,
-                messages=messages,
-                tools=_tool_schema(),
+                messages=request_messages,
+                tools=tool_schema(),
                 tool_choice="auto",
                 temperature=0.2,
                 timeout=AGENT_REQUEST_TIMEOUT_SECONDS,
@@ -1883,12 +1284,18 @@ class CodeAgent:
                 )
                 if (
                     require_code_inspection
-                    and not inspected
+                    and not state.inspected
                     and current_has_content_edit
                     and not current_has_inspection
                     and not inspection_retry_forced
                 ):
                     inspection_retry_forced = True
+                    self._set_phase(
+                        state,
+                        AgentPhase.INSPECTING,
+                        on_event,
+                        detail="Inspection required before editing",
+                    )
                     messages.append(
                         {
                             "role": "system",
@@ -1917,66 +1324,102 @@ class CodeAgent:
                     if assistant_text:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
-                if content_changed and not validated and not validation_retry_forced:
+                if state.content_changed and not state.validated and not validation_retry_forced:
                     validation_retry_forced = True
                     messages.append(
                         {
                             "role": "system",
-                            "content": self._validation_prompt(changed_paths, validation_plan),
+                            "content": validation_prompt(state.changed_paths or set(), validation_plan),
                         }
                     )
                     if assistant_text:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
                 if (
-                    content_changed
-                    and validation_failed
+                    state.content_changed
+                    and state.validation_failed
                     and validation_repair_attempts < self.MAX_VALIDATION_REPAIR_ROUNDS
                 ):
                     validation_repair_attempts += 1
-                    self._emit_event(
+                    self._set_phase(state, AgentPhase.REPAIRING, on_event)
+                    self._set_plan_step(
+                        state,
+                        "make_changes",
+                        "active",
                         on_event,
-                        {
-                            "type": "agent_status",
-                            "status": "Repairing",
-                            "kind": "active",
-                        },
+                        detail="Repairing failed validation",
                     )
                     messages.append(
                         {
                             "role": "system",
-                            "content": self._validation_failure_prompt(
-                                changed_paths,
-                                last_validation_summary,
-                                validation_plan,
+                            "content": validation_failure_prompt(
+                                changed_paths=state.changed_paths or set(),
+                                summary=state.last_validation_summary,
+                                plan=validation_plan,
                                 attempt=validation_repair_attempts,
+                                max_attempts=self.MAX_VALIDATION_REPAIR_ROUNDS,
                             ),
                         }
                     )
                     if assistant_text:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
+                if (
+                    (state.mutated or state.content_changed or state.validated or require_tools)
+                    and not final_response_forced
+                ):
+                    final_response_forced = True
+                    self._set_phase(state, AgentPhase.FINALIZING, on_event)
+                    self._set_plan_step(state, "final_answer", "active", on_event)
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": self._final_response_prompt(state),
+                        }
+                    )
+                    continue
+
                 final_text = assistant_text
                 if not final_text:
                     final_text = "已完成。"
-                if content_changed and validation_failed and last_validation_summary:
+                self._set_phase(state, AgentPhase.FINALIZING, on_event)
+                self._set_plan_step(state, "final_answer", "done", on_event)
+                if state.content_changed and state.validation_failed and state.last_validation_summary:
                     final_text = (
                         f"{final_text}\n\nValidation is still failing after automatic retries.\n"
-                        f"Last validation summary: {last_validation_summary}"
+                        f"Last validation summary: {state.last_validation_summary}"
                     )
-                self._emit(emit, report_parts, f"### 结果\n\n{final_text}\n")
+                self._emit(emit, report_parts, f"### 缁撴灉\n\n{final_text}\n")
+                self._finish_run_log("completed", self._run_state_payload(state))
                 return "".join(report_parts)
 
             if assistant_text:
                 self._emit(emit, report_parts, f"{assistant_text}\n\n")
 
-            self._emit(emit, report_parts, f"### 工具调用 {round_idx + 1}\n")
+            self._emit(emit, report_parts, f"### 宸ュ叿璋冪敤 {round_idx + 1}\n")
             for tool_call in tool_calls:
                 if should_stop and should_stop():
-                    self._emit(emit, report_parts, "\n> 已中止\n")
+                    self._set_phase(state, AgentPhase.STOPPED, on_event)
+                    self._emit(emit, report_parts, "\n> 宸蹭腑姝n")
+                    self._finish_run_log("stopped", self._run_state_payload(state))
                     return "".join(report_parts)
 
                 name = tool_call.function.name
+                if name in self.VALIDATION_TOOLS:
+                    self._set_phase(state, AgentPhase.VALIDATING, on_event)
+                elif name in self.MUTATION_TOOLS:
+                    self._set_phase(state, AgentPhase.EDITING, on_event)
+                elif name in self.INSPECTION_TOOLS:
+                    self._set_phase(state, AgentPhase.INSPECTING, on_event)
+                else:
+                    self._set_phase(state, AgentPhase.PLANNING, on_event)
+                self._set_plan_for_tool(
+                    state,
+                    name,
+                    "active",
+                    on_event,
+                    detail=f"Running tool `{name}`",
+                )
                 raw_args = tool_call.function.arguments or "{}"
                 args: dict[str, Any] = {}
                 display_args: dict[str, Any]
@@ -2010,25 +1453,51 @@ class CodeAgent:
                         on_event=on_event,
                     )
                     tool_action_emitted = True
+                self._record_tool_loop_guard(
+                    state,
+                    name=name,
+                    args=args if args else {"raw_arguments": raw_args},
+                    result=result,
+                    ok=result_ok,
+                    messages=messages,
+                    on_event=on_event,
+                    round_idx=round_idx + 1,
+                )
                 if name in self.INSPECTION_TOOLS and result_ok:
-                    inspected = True
+                    state.inspected = True
+                    self._set_plan_step(
+                        state,
+                        "inspect_context",
+                        "done",
+                        on_event,
+                        detail=f"Completed `{name}`",
+                    )
                 if name in self.MUTATION_TOOLS and result_ok:
-                    mutated = True
-                    changed_paths.update(self._paths_touched_by_tool(name, result))
+                    state.mutated = True
+                    self._set_plan_step(
+                        state,
+                        "make_changes",
+                        "done",
+                        on_event,
+                        detail=f"Completed `{name}`",
+                    )
+                    if state.changed_paths is not None:
+                        state.changed_paths.update(self._paths_touched_by_tool(name, result))
                     if name in self.CONTENT_EDIT_TOOLS:
-                        content_changed = True
-                        validated = False
+                        state.content_changed = True
+                        state.validated = False
                         validation_retry_forced = False
+                        final_response_forced = False
                         validation_repair_attempts = 0
-                        validation_failed = False
-                        last_validation_summary = None
+                        state.validation_failed = False
+                        state.last_validation_summary = None
                         validation_plan = None
                         validation_plan_announced = False
                 if name in self.VALIDATION_TOOLS:
-                    validated = True
-                    validation_failed = not result_ok
-                    if validation_failed:
-                        last_validation_summary = str(
+                    state.validated = True
+                    state.validation_failed = not result_ok
+                    if state.validation_failed:
+                        state.last_validation_summary = str(
                             result.get("summary")
                             or result.get("error")
                             or result.get("stderr")
@@ -2036,14 +1505,35 @@ class CodeAgent:
                             or ""
                         ).strip() or None
                     else:
-                        last_validation_summary = str(result.get("summary") or "").strip() or None
+                        state.last_validation_summary = str(result.get("summary") or "").strip() or None
+                    self._set_plan_step(
+                        state,
+                        "validate_changes",
+                        "failed" if state.validation_failed else "done",
+                        on_event,
+                        detail=state.last_validation_summary,
+                    )
+                if not result_ok:
+                    self._set_plan_for_tool(
+                        state,
+                        name,
+                        "failed",
+                        on_event,
+                        detail=str(
+                            result.get("summary")
+                            or result.get("error")
+                            or result.get("stderr")
+                            or result.get("stdout")
+                            or f"`{name}` failed"
+                        ).strip()[:500],
+                    )
 
                 if not tool_action_emitted:
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "content": json.dumps(result, ensure_ascii=False),
+                            "content": tool_result_json_for_model(name, result),
                         }
                     )
 
@@ -2063,7 +1553,7 @@ class CodeAgent:
                     self._emit(
                         emit,
                         report_parts,
-                        self._tool_report_section(name, display_args, result, preview=preview_text),
+                        tool_report_section(name, display_args, result, preview=preview_text),
                     )
 
         self._emit(
@@ -2071,6 +1561,7 @@ class CodeAgent:
             report_parts,
             "### 结果\n\n"
             "已达到最大轮次限制，未能自动收敛到最终答案。"
-            " 请查看工具输出，或者再发一条更明确的指令继续。",
+            "请查看工具输出，或者再发一条更明确的指令继续。",
         )
+        self._finish_run_log("max_rounds", self._run_state_payload(state))
         return "".join(report_parts)
