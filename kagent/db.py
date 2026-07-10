@@ -71,6 +71,16 @@ def init_db() -> None:
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_rollbacks_session_status ON rollback_entries(session_id, status, id DESC)"
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_memories (
+                workspace_root TEXT PRIMARY KEY,
+                memory TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'auto',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
 
 def create_session(session_id: str, title: str = "新对话") -> None:
@@ -176,6 +186,46 @@ def save_context_summary(
                 summary,
                 int(through_message_id),
                 int(source_message_count),
+            ),
+        )
+
+
+def get_project_memory(workspace_root: str) -> dict | None:
+    with _lock, _conn() as c:
+        row = c.execute(
+            """
+            SELECT workspace_root, memory, source, updated_at
+            FROM project_memories
+            WHERE workspace_root = ?
+            LIMIT 1
+            """,
+            (workspace_root,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "workspace_root": row["workspace_root"],
+            "memory": json.loads(row["memory"]),
+            "source": row["source"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def save_project_memory(workspace_root: str, memory: dict, source: str = "auto") -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            """
+            INSERT INTO project_memories (workspace_root, memory, source, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(workspace_root) DO UPDATE SET
+                memory = excluded.memory,
+                source = excluded.source,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                workspace_root,
+                json.dumps(memory, ensure_ascii=False),
+                source,
             ),
         )
 

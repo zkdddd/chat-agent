@@ -1040,6 +1040,174 @@ class WorkspaceTools:
             max_preview_chars=12000,
         )
 
+    def _active_rollback_entries(self, limit: int = 500) -> list[dict[str, Any]]:
+        if not self.session_id:
+            return []
+        return db.list_rollback_entries(
+            self.session_id,
+            limit=max(1, int(limit)),
+            include_inactive=False,
+        )
+
+    @staticmethod
+    def _rollback_entry_states(entry: dict[str, Any]) -> list[dict[str, Any]]:
+        payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+        states = payload.get("states") if isinstance(payload.get("states"), list) else []
+        return [state for state in states if isinstance(state, dict) and state.get("path")]
+
+    @staticmethod
+    def _normalize_requested_paths(paths: list[str]) -> set[str]:
+        return {str(path).replace("\\", "/").strip() for path in paths if str(path).strip()}
+
+    def _select_rollback_states(
+        self,
+        paths: list[str],
+        rollback_id: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        requested = self._normalize_requested_paths(paths)
+        if not requested:
+            raise WorkspaceError("paths must include at least one path")
+
+        entries = (
+            [db.get_rollback_entry(self.session_id, int(rollback_id))]
+            if rollback_id is not None and self.session_id
+            else self._active_rollback_entries()
+        )
+        selected: list[dict[str, Any]] = []
+        selected_paths: set[str] = set()
+        for entry in entries:
+            if not entry or str(entry.get("status") or "") != "active":
+                continue
+            payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+            snapshot_token = payload.get("snapshot_token")
+            for state in self._rollback_entry_states(entry):
+                rel_path = str(state.get("path") or "")
+                if rel_path not in requested or rel_path in selected_paths:
+                    continue
+                selected_state = dict(state)
+                selected_state["_rollback_id"] = int(entry["id"])
+                selected_state["_source_tool"] = str(entry["tool_name"])
+                selected_state["_created_at"] = str(entry["created_at"])
+                selected_state["_snapshot_token"] = str(snapshot_token) if snapshot_token else ""
+                selected.append(selected_state)
+                selected_paths.add(rel_path)
+            if selected_paths == requested:
+                break
+
+        missing = sorted(requested - selected_paths)
+        return selected, missing
+
+    def _rollback_preview_for_states(
+        self,
+        states: list[dict[str, Any]],
+        *,
+        title: str,
+        missing_paths: list[str] | None = None,
+        max_preview_chars: int = 12000,
+    ) -> dict[str, Any]:
+        diff_entries: list[dict[str, Any]] = []
+        preview_sections = [title]
+        if missing_paths:
+            preview_sections.append("# missing rollback paths: " + ", ".join(missing_paths))
+
+        for state in states:
+            rel_path = str(state.get("path") or "")
+            snapshot_token = str(state.get("_snapshot_token") or "")
+            snapshot_rel = str(state.get("snapshot_rel") or "")
+            snapshot_path = (
+                self._snapshot_root_for_token(snapshot_token) / Path(snapshot_rel)
+                if snapshot_token and snapshot_rel
+                else None
+            )
+            section = self._rollback_diff_section(
+                rel_path=rel_path,
+                current_path=self._resolve_path(rel_path, access="read"),
+                snapshot_path=snapshot_path,
+            )
+            diff_entries.append(
+                {
+                    "path": section["path"],
+                    "action": section["action"],
+                    "diff_available": section["diff_available"],
+                    "rollback_id": state.get("_rollback_id"),
+                    "source_tool": state.get("_source_tool"),
+                }
+            )
+            preview_sections.append("")
+            preview_sections.append(f"# from rollback #{state.get('_rollback_id')}")
+            preview_sections.append(section["preview"])
+
+        preview, preview_truncated = self._clip(
+            "\n".join(preview_sections).strip(),
+            max_preview_chars,
+        )
+        paths = [str(state.get("path")) for state in states if state.get("path")]
+        return {
+            "available": bool(states),
+            "paths": paths,
+            "path_count": len(paths),
+            "missing_paths": missing_paths or [],
+            "missing_path_count": len(missing_paths or []),
+            "rollback_ids": sorted({int(state["_rollback_id"]) for state in states}),
+            "diff_entries": diff_entries,
+            "preview": preview,
+            "preview_truncated": preview_truncated,
+            "summary": (
+                f"Previewing rollback for {len(paths)} path{'s' if len(paths) != 1 else ''}"
+                if states
+                else "No matching rollback states found"
+            ),
+        }
+
+    def preview_rollback_session(self, limit: int = 50) -> dict[str, Any]:
+        if not self.session_id:
+            return self._rollback_preview_unavailable(
+                "Rollback is unavailable without an active chat session",
+                "rollback unavailable without an active chat session",
+            )
+
+        entries = self._active_rollback_entries(limit=limit)
+        states: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for entry in entries:
+            payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+            snapshot_token = payload.get("snapshot_token")
+            for state in self._rollback_entry_states(entry):
+                rel_path = str(state.get("path") or "")
+                if rel_path in seen_paths:
+                    continue
+                seen_paths.add(rel_path)
+                selected = dict(state)
+                selected["_rollback_id"] = int(entry["id"])
+                selected["_source_tool"] = str(entry["tool_name"])
+                selected["_created_at"] = str(entry["created_at"])
+                selected["_snapshot_token"] = str(snapshot_token) if snapshot_token else ""
+                states.append(selected)
+
+        return self._rollback_preview_for_states(
+            states,
+            title=f"# session rollback preview ({len(entries)} active entries scanned)",
+        )
+
+    def preview_rollback_paths(
+        self,
+        paths: list[str],
+        rollback_id: int | None = None,
+    ) -> dict[str, Any]:
+        if not self.session_id:
+            return self._rollback_preview_unavailable(
+                "Rollback is unavailable without an active chat session",
+                "rollback unavailable without an active chat session",
+            )
+
+        states, missing = self._select_rollback_states(paths, rollback_id=rollback_id)
+        title = (
+            f"# rollback paths preview from rollback #{int(rollback_id)}"
+            if rollback_id is not None
+            else "# rollback paths preview from latest matching active entries"
+        )
+        return self._rollback_preview_for_states(states, title=title, missing_paths=missing)
+
     def list_rollback_history(
         self,
         limit: int = 12,
@@ -1143,6 +1311,7 @@ class WorkspaceTools:
         self,
         entry: dict[str, Any],
         requested_tool: str,
+        selected_paths: set[str] | None = None,
     ) -> dict[str, Any]:
         status = str(entry.get("status") or "")
         if status != "active":
@@ -1154,9 +1323,22 @@ class WorkspaceTools:
         if payload.get("action") != "restore_states":
             raise WorkspaceError("Unsupported rollback payload")
 
+        all_states = [
+            state
+            for state in self._rollback_entry_states(entry)
+            if selected_paths is None or str(state.get("path") or "") in selected_paths
+        ]
+        if not all_states:
+            raise WorkspaceError(f"No matching paths in rollback #{int(entry['id'])}")
+
+        remaining_states = [
+            state
+            for state in self._rollback_entry_states(entry)
+            if selected_paths is not None and str(state.get("path") or "") not in selected_paths
+        ]
         target_paths = [
-            self._resolve_path(path, access="write")
-            for path in self._rollback_entry_paths(entry)
+            self._resolve_path(str(state["path"]), access="write")
+            for state in all_states
         ]
         undo_snapshot_token, undo_states = self._capture_restore_states(target_paths)
 
@@ -1166,12 +1348,10 @@ class WorkspaceTools:
             if snapshot_token
             else None
         )
-        states = payload.get("states") if isinstance(payload.get("states"), list) else []
         try:
             restored_paths = [
                 self._restore_path_state(state, snapshot_root)
-                for state in states
-                if isinstance(state, dict)
+                for state in all_states
             ]
         except Exception:
             self._cleanup_snapshot_token(undo_snapshot_token)
@@ -1185,6 +1365,17 @@ class WorkspaceTools:
             )
         db.mark_rollback_entry_applied(int(entry["id"]))
 
+        remaining_rollback_id = None
+        if remaining_states:
+            remaining_payload = dict(payload)
+            remaining_payload["states"] = remaining_states
+            remaining_rollback_id = db.save_rollback_entry(
+                self.session_id,
+                str(entry["tool_name"]),
+                f"Remaining paths from rollback #{entry['id']}: {entry['summary']}",
+                remaining_payload,
+            )
+
         undo_summary = f"Undo rollback #{entry['id']} from {entry['tool_name']}"
         undo_rollback_id = self._save_restore_rollback(
             requested_tool,
@@ -1193,7 +1384,8 @@ class WorkspaceTools:
             undo_states,
         )
 
-        self._cleanup_snapshot_token(str(snapshot_token) if snapshot_token else None)
+        if not remaining_states:
+            self._cleanup_snapshot_token(str(snapshot_token) if snapshot_token else None)
         summary = (
             f"Rolled back #{entry['id']} from {entry['tool_name']}"
             + (
@@ -1210,6 +1402,7 @@ class WorkspaceTools:
             "ok": True,
             "rollback_id": int(entry["id"]),
             "undo_rollback_id": undo_rollback_id,
+            "remaining_rollback_id": remaining_rollback_id,
             "source_tool": str(entry["tool_name"]),
             "created_at": str(entry["created_at"]),
             "status": "applied",
@@ -1237,6 +1430,49 @@ class WorkspaceTools:
         if entry is None:
             raise WorkspaceError(f"Rollback #{int(rollback_id)} was not found in this session")
         return self._apply_rollback_entry(entry, requested_tool="rollback_change")
+
+    def rollback_paths(
+        self,
+        paths: list[str],
+        rollback_id: int | None = None,
+    ) -> dict[str, Any]:
+        if not self.session_id:
+            raise WorkspaceError("Rollback is unavailable without an active chat session")
+
+        states, missing = self._select_rollback_states(paths, rollback_id=rollback_id)
+        if missing:
+            raise WorkspaceError("No rollback state found for: " + ", ".join(missing))
+        if not states:
+            raise WorkspaceError("No matching rollback states found")
+
+        grouped: dict[int, set[str]] = {}
+        for state in states:
+            grouped.setdefault(int(state["_rollback_id"]), set()).add(str(state["path"]))
+
+        results = []
+        restored_paths: list[str] = []
+        for entry_id, selected in grouped.items():
+            entry = db.get_rollback_entry(self.session_id, entry_id)
+            if entry is None:
+                raise WorkspaceError(f"Rollback #{entry_id} was not found in this session")
+            result = self._apply_rollback_entry(
+                entry,
+                requested_tool="rollback_paths",
+                selected_paths=selected,
+            )
+            results.append(result)
+            restored_paths.extend(str(path) for path in result.get("paths", []))
+
+        summary = f"Rolled back {len(restored_paths)} selected path"
+        summary += "s" if len(restored_paths) != 1 else ""
+        return {
+            "ok": True,
+            "paths": restored_paths,
+            "path_count": len(restored_paths),
+            "rollback_ids": sorted(grouped),
+            "results": results,
+            "summary": summary,
+        }
 
     def write_file(self, path: str, content: str) -> dict[str, Any]:
         file_path = self._resolve_path(path, access="write")

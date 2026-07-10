@@ -19,6 +19,7 @@ def test_safe_validation_command_is_low_risk_without_approval():
 
     assert policy["risk_level"] == "low"
     assert policy["approval_required"] is False
+    assert policy["risk_categories"] == ["validation"]
 
 
 def test_destructive_command_is_critical_and_requires_approval():
@@ -32,6 +33,7 @@ def test_destructive_command_is_critical_and_requires_approval():
     assert policy["risk_level"] == "critical"
     assert policy["approval_required"] is True
     assert policy["destructive"] is True
+    assert policy["risk_categories"] == ["destructive_delete"]
 
 
 def test_sensitive_file_write_is_high_risk():
@@ -56,3 +58,53 @@ def test_large_directory_delete_is_critical():
 
     assert policy["risk_level"] == "critical"
     assert policy["destructive"] is True
+
+
+def test_dependency_install_command_is_high_risk_with_category():
+    policy = tool_policy(
+        "run_command",
+        {"command": "python -m pip install requests", "cwd": "."},
+        {},
+        None,
+    )
+
+    assert policy["risk_level"] == "high"
+    assert policy["approval_required"] is True
+    assert policy["risk_categories"] == ["dependency_change"]
+    assert policy["risk_factors"][0]["kind"] == "dependency_command"
+
+
+def test_git_write_command_is_high_risk_with_category():
+    policy = tool_policy(
+        "run_command",
+        {"command": "git commit -m test", "cwd": "."},
+        {},
+        None,
+    )
+
+    assert policy["risk_level"] == "high"
+    assert policy["risk_categories"] == ["git_write"]
+
+
+def test_network_command_is_high_risk_with_category():
+    policy = tool_policy(
+        "run_command",
+        {"command": "curl https://example.com", "cwd": "."},
+        {},
+        None,
+    )
+
+    assert policy["risk_level"] == "high"
+    assert policy["risk_categories"] == ["network"]
+
+
+def test_chained_command_is_high_risk_with_category():
+    policy = tool_policy(
+        "run_command",
+        {"command": "python -m pytest -q && git status", "cwd": "."},
+        {},
+        None,
+    )
+
+    assert policy["risk_level"] == "high"
+    assert policy["risk_categories"] == ["chained_shell"]

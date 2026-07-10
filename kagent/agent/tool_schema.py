@@ -224,6 +224,41 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "preview_rollback_session",
+                "description": "Preview the current session's active rollbackable paths without applying changes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum number of active rollback records to scan."},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "preview_rollback_paths",
+                "description": "Preview rollback diffs for selected paths, optionally constrained to a rollback_id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "description": "Workspace-relative paths to preview.",
+                        },
+                        "rollback_id": {"type": "integer", "minimum": 1, "description": "Optional rollback history id to inspect."},
+                    },
+                    "required": ["paths"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "rollback_last_change",
                 "description": "Undo the most recent workspace mutation recorded for this chat session.",
                 "parameters": {
@@ -244,6 +279,27 @@ def tool_schema() -> list[dict[str, Any]]:
                         "rollback_id": {"type": "integer", "minimum": 1, "description": "The rollback history id to restore."},
                     },
                     "required": ["rollback_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "rollback_paths",
+                "description": "Rollback selected workspace paths, optionally constrained to a rollback_id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "description": "Workspace-relative paths to rollback.",
+                        },
+                        "rollback_id": {"type": "integer", "minimum": 1, "description": "Optional rollback history id to restore from."},
+                    },
+                    "required": ["paths"],
                     "additionalProperties": False,
                 },
             },

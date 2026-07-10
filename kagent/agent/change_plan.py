@@ -12,6 +12,7 @@ CHANGE_TOOLS = {
     "make_directory",
     "rollback_last_change",
     "rollback_change",
+    "rollback_paths",
 }
 
 
@@ -61,7 +62,7 @@ def _planned_paths(name: str, args: dict[str, Any]) -> list[str]:
             for path in (args.get("source_path"), args.get("target_path"))
             if path
         ]
-    if name in {"rollback_last_change", "rollback_change"}:
+    if name in {"rollback_last_change", "rollback_change", "rollback_paths"}:
         paths = args.get("paths") or []
         return [str(path) for path in paths if path]
     return []
@@ -77,6 +78,7 @@ def _operation_for_tool(name: str) -> str:
         "make_directory": "mkdir",
         "rollback_last_change": "rollback",
         "rollback_change": "rollback",
+        "rollback_paths": "rollback",
     }.get(name, name)
 
 

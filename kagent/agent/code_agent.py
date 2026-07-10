@@ -19,11 +19,14 @@ from ..config import (
 )
 from ..context import manage_context
 from ..llm import AGENT_REQUEST_TIMEOUT_SECONDS, client
+from .agent_stream import AggregatedAssistantMessage, aggregate_chat_completion_stream
 from .change_plan import build_change_plan
 from .failure_diagnostics import extract_failure_diagnostics
 from .failure_focus import focus_prompt, focus_targets_from_diagnostics
+from .final_trust import build_final_trust_summary, final_trust_prompt
 from .risk_policy import tool_policy
 from .patch_recovery import patch_failure_recovery, patch_recovery_prompt
+from .project_memory import format_project_memory_for_prompt, load_or_refresh_project_memory
 from .run_log import RunLogger
 from .symbol_index import find_symbols
 from .task_plan import (
@@ -90,6 +93,8 @@ class AgentRunState:
     plan: list[PlanStep] | None = None
     focused_validation_commands: list[dict[str, Any]] | None = None
     tool_call_history: list[dict[str, Any]] | None = None
+    failed_tool_count: int = 0
+    loop_warning_count: int = 0
 
     def __post_init__(self) -> None:
         if self.changed_paths is None:
@@ -113,8 +118,8 @@ Use the workspace tools in this order when it helps:
 8. write_file only when a full replacement is simpler.
 9. run_command to validate after edits.
 10. list_rollback_history when the user asks what can be undone.
-11. preview_rollback_change when the user wants to inspect the exact diff for a rollback record.
-12. rollback_last_change or rollback_change when the user explicitly asks to undo workspace changes in this chat session.
+11. preview_rollback_change, preview_rollback_session, or preview_rollback_paths when the user wants to inspect rollback diffs before applying them.
+12. rollback_last_change, rollback_change, or rollback_paths when the user explicitly asks to undo workspace changes in this chat session.
 
 Prefer small, reviewable changes. If a command fails, inspect the output and fix the real cause before continuing.
 If the task requires checking files, changing files, renaming paths, or running commands, do not stop after saying what you will do. In the same turn, call the next tool and continue the task.
@@ -141,12 +146,15 @@ class CodeAgent:
         "read_file",
         "list_rollback_history",
         "preview_rollback_change",
+        "preview_rollback_session",
+        "preview_rollback_paths",
     }
     CONTENT_EDIT_TOOLS = {
         "write_file",
         "apply_patch",
         "rollback_last_change",
         "rollback_change",
+        "rollback_paths",
     }
     MUTATION_TOOLS = {
         "write_file",
@@ -157,6 +165,7 @@ class CodeAgent:
         "make_directory",
         "rollback_last_change",
         "rollback_change",
+        "rollback_paths",
     }
     VALIDATION_TOOLS = {"run_command"}
     MAX_VALIDATION_REPAIR_ROUNDS = 3
@@ -336,7 +345,7 @@ class CodeAgent:
             return [str(path) for path in result.get("files_touched", [])]
         if name == "write_file":
             return [str(result["path"])] if result.get("path") else []
-        if name in {"rollback_last_change", "rollback_change"}:
+        if name in {"rollback_last_change", "rollback_change", "rollback_paths"}:
             return [str(path) for path in result.get("paths", [])]
         if name == "rename_path":
             paths: list[str] = []
@@ -362,6 +371,40 @@ class CodeAgent:
         if emit:
             emit(text)
 
+    def _stream_assistant_message(
+        self,
+        request_messages: list[dict[str, Any]],
+        emit: EmitFn | None,
+        report_parts: list[str],
+    ) -> tuple[AggregatedAssistantMessage, bool]:
+        stream_started = False
+
+        def on_text_delta(delta: str) -> None:
+            nonlocal stream_started
+            if not stream_started:
+                stream_started = True
+                self._emit(emit, report_parts, "### 模型输出\n\n")
+            self._emit(emit, report_parts, delta)
+
+        stream = client.chat.completions.create(
+            model=self.model,
+            messages=request_messages,
+            tools=tool_schema(),
+            tool_choice="auto",
+            temperature=0.2,
+            timeout=AGENT_REQUEST_TIMEOUT_SECONDS,
+            stream=True,
+        )
+        try:
+            return (
+                aggregate_chat_completion_stream(stream, on_text_delta=on_text_delta),
+                stream_started,
+            )
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+
     def _emit_event(self, on_event: EventFn | None, event: dict[str, Any]) -> None:
         if self.run_logger is not None:
             self.run_logger.write(str(event.get("type") or "event"), event)
@@ -373,6 +416,24 @@ class CodeAgent:
             return
         self._run_log_finished = True
         self.run_logger.finish(status, data)
+
+    def _finish_run_with_trust_check(
+        self,
+        status: str,
+        state: AgentRunState,
+        on_event: EventFn | None,
+    ) -> None:
+        trust_summary = self._final_trust_summary(state, status=status)
+        self._emit_event(
+            on_event,
+            {
+                "type": "final_trust_check",
+                "trust": trust_summary,
+            },
+        )
+        payload = self._run_state_payload(state)
+        payload["final_trust"] = trust_summary
+        self._finish_run_log(status, payload)
 
     @staticmethod
     def _run_state_payload(state: AgentRunState) -> dict[str, Any]:
@@ -419,6 +480,7 @@ class CodeAgent:
         )
         if not warning:
             return
+        state.loop_warning_count += 1
         self._emit_event(
             on_event,
             {
@@ -493,14 +555,26 @@ class CodeAgent:
             event["detail"] = detail
         self._emit_event(on_event, event)
 
-    @staticmethod
-    def _final_response_prompt(state: AgentRunState) -> str:
+    def _final_trust_summary(self, state: AgentRunState, *, status: str) -> dict[str, Any]:
+        return build_final_trust_summary(
+            status=status,
+            content_changed=state.content_changed,
+            changed_paths=sorted(state.changed_paths or []),
+            validated=state.validated,
+            validation_failed=state.validation_failed,
+            last_validation_summary=state.last_validation_summary,
+            failed_tool_count=state.failed_tool_count,
+            loop_warning_count=state.loop_warning_count,
+        )
+
+    def _final_response_prompt(self, state: AgentRunState) -> str:
         changed_paths = sorted(state.changed_paths or [])
         changed_text = ", ".join(changed_paths[:12]) if changed_paths else "none"
         validation_status = "not run"
         if state.validated:
             validation_status = "failed" if state.validation_failed else "passed"
         summary = state.last_validation_summary or "none"
+        trust_summary = self._final_trust_summary(state, status="completed")
         return (
             "Prepare the final user-facing answer from the actual execution state.\n"
             f"- inspected_project: {state.inspected}\n"
@@ -510,6 +584,7 @@ class CodeAgent:
             f"- validation_status: {validation_status}\n"
             f"- last_validation_summary: {summary}\n"
             f"- plan_status: {plan_summary_text(state.plan or [])}\n\n"
+            f"{final_trust_prompt(trust_summary)}\n\n"
             "Keep it concise. State what changed, what validation ran, and any remaining risk. "
             "Do not claim validation passed if validation_status is not passed."
         )
@@ -1016,11 +1091,25 @@ class CodeAgent:
             return self.workspace.preview_rollback_change(
                 rollback_id=int(args["rollback_id"]),
             )
+        if name == "preview_rollback_session":
+            return self.workspace.preview_rollback_session(
+                limit=int(args.get("limit", 50)),
+            )
+        if name == "preview_rollback_paths":
+            return self.workspace.preview_rollback_paths(
+                paths=[str(path) for path in args.get("paths", [])],
+                rollback_id=args.get("rollback_id"),
+            )
         if name == "rollback_last_change":
             return self.workspace.rollback_last_change()
         if name == "rollback_change":
             return self.workspace.rollback_change(
                 rollback_id=int(args["rollback_id"]),
+            )
+        if name == "rollback_paths":
+            return self.workspace.rollback_paths(
+                paths=[str(path) for path in args.get("paths", [])],
+                rollback_id=args.get("rollback_id"),
             )
         raise WorkspaceError(f"Unknown tool: {name}")
 
@@ -1082,6 +1171,12 @@ class CodeAgent:
         final_response_forced = False
         validation_repair_attempts = 0
         validation_plan_run_seq = 0
+        project_memory_prompt = ""
+        try:
+            project_memory = load_or_refresh_project_memory(self.workspace.root)
+            project_memory_prompt = format_project_memory_for_prompt(project_memory)
+        except Exception as exc:
+            project_memory_prompt = f"Long-term project memory is unavailable: {exc}"
         state = AgentRunState(
             changed_paths=set(),
             plan=build_task_plan(
@@ -1090,6 +1185,8 @@ class CodeAgent:
                 requires_code_edit=require_code_inspection,
             ),
         )
+        if project_memory_prompt:
+            messages.append({"role": "system", "content": project_memory_prompt})
         messages.append({"role": "system", "content": plan_for_model(state.plan or [])})
         validation_plan: dict[str, Any] | None = None
         validation_plan_announced = False
@@ -1126,7 +1223,7 @@ class CodeAgent:
             if should_stop and should_stop():
                 self._set_phase(state, AgentPhase.STOPPED, on_event)
                 self._emit(emit, report_parts, "\n> 宸蹭腑姝n")
-                self._finish_run_log("stopped", self._run_state_payload(state))
+                self._finish_run_with_trust_check("stopped", state, on_event)
                 return "".join(report_parts)
 
             if state.content_changed and not state.validated:
@@ -1258,16 +1355,11 @@ class CodeAgent:
 
             self._set_phase(state, AgentPhase.PLANNING, on_event)
             request_messages = self._prepare_model_messages(messages, on_event)
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=request_messages,
-                tools=tool_schema(),
-                tool_choice="auto",
-                temperature=0.2,
-                timeout=AGENT_REQUEST_TIMEOUT_SECONDS,
+            assistant, assistant_text_streamed = self._stream_assistant_message(
+                request_messages,
+                emit,
+                report_parts,
             )
-
-            assistant = response.choices[0].message
             assistant_dump = assistant.model_dump(exclude_none=True)
             messages.append(assistant_dump)
 
@@ -1305,7 +1397,7 @@ class CodeAgent:
                             ),
                         }
                     )
-                    if assistant_text:
+                    if assistant_text and not assistant_text_streamed:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
 
@@ -1321,7 +1413,7 @@ class CodeAgent:
                             ),
                         }
                     )
-                    if assistant_text:
+                    if assistant_text and not assistant_text_streamed:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
                 if state.content_changed and not state.validated and not validation_retry_forced:
@@ -1332,7 +1424,7 @@ class CodeAgent:
                             "content": validation_prompt(state.changed_paths or set(), validation_plan),
                         }
                     )
-                    if assistant_text:
+                    if assistant_text and not assistant_text_streamed:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
                 if (
@@ -1361,7 +1453,7 @@ class CodeAgent:
                             ),
                         }
                     )
-                    if assistant_text:
+                    if assistant_text and not assistant_text_streamed:
                         self._emit(emit, report_parts, f"{assistant_text}\n\n")
                     continue
                 if (
@@ -1389,11 +1481,14 @@ class CodeAgent:
                         f"{final_text}\n\nValidation is still failing after automatic retries.\n"
                         f"Last validation summary: {state.last_validation_summary}"
                     )
-                self._emit(emit, report_parts, f"### 缁撴灉\n\n{final_text}\n")
-                self._finish_run_log("completed", self._run_state_payload(state))
+                if assistant_text_streamed:
+                    report_parts.append(f"\n\n### 结果\n\n{final_text}\n")
+                else:
+                    self._emit(emit, report_parts, f"### 结果\n\n{final_text}\n")
+                self._finish_run_with_trust_check("completed", state, on_event)
                 return "".join(report_parts)
 
-            if assistant_text:
+            if assistant_text and not assistant_text_streamed:
                 self._emit(emit, report_parts, f"{assistant_text}\n\n")
 
             self._emit(emit, report_parts, f"### 宸ュ叿璋冪敤 {round_idx + 1}\n")
@@ -1401,7 +1496,7 @@ class CodeAgent:
                 if should_stop and should_stop():
                     self._set_phase(state, AgentPhase.STOPPED, on_event)
                     self._emit(emit, report_parts, "\n> 宸蹭腑姝n")
-                    self._finish_run_log("stopped", self._run_state_payload(state))
+                    self._finish_run_with_trust_check("stopped", state, on_event)
                     return "".join(report_parts)
 
                 name = tool_call.function.name
@@ -1514,6 +1609,7 @@ class CodeAgent:
                         detail=state.last_validation_summary,
                     )
                 if not result_ok:
+                    state.failed_tool_count += 1
                     self._set_plan_for_tool(
                         state,
                         name,
@@ -1563,5 +1659,5 @@ class CodeAgent:
             "已达到最大轮次限制，未能自动收敛到最终答案。"
             "请查看工具输出，或者再发一条更明确的指令继续。",
         )
-        self._finish_run_log("max_rounds", self._run_state_payload(state))
+        self._finish_run_with_trust_check("max_rounds", state, on_event)
         return "".join(report_parts)

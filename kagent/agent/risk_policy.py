@@ -19,6 +19,8 @@ INSPECTION_TOOLS = {
     "read_file",
     "list_rollback_history",
     "preview_rollback_change",
+    "preview_rollback_session",
+    "preview_rollback_paths",
 }
 SENSITIVE_PATH_NAMES = {
     ".env",
@@ -62,6 +64,17 @@ SAFE_COMMAND_PATTERNS = (
     r"(^| )cargo test( |$)",
     r"(^| )go test( |$)",
 )
+NETWORK_COMMAND_PATTERNS = (
+    "curl ",
+    "wget ",
+    "Invoke-WebRequest".lower(),
+    "iwr ",
+    "Invoke-RestMethod".lower(),
+    "irm ",
+    "ssh ",
+    "scp ",
+    "rsync ",
+)
 CRITICAL_COMMAND_PATTERNS = (
     "rm -rf",
     "rm -r ",
@@ -94,6 +107,34 @@ HIGH_RISK_COMMAND_PATTERNS = (
     "add-content ",
     "out-file ",
     "start-process ",
+)
+DEPENDENCY_COMMAND_PATTERNS = (
+    "pip install",
+    "pip uninstall",
+    "python -m pip install",
+    "python -m pip uninstall",
+    "npm install",
+    "npm uninstall",
+    "pnpm install",
+    "pnpm remove",
+    "yarn add",
+    "yarn remove",
+    "cargo add",
+    "cargo install",
+    "go get",
+)
+GIT_WRITE_COMMAND_PATTERNS = (
+    "git push",
+    "git commit",
+    "git merge",
+    "git rebase",
+    "git reset",
+    "git clean",
+    "git checkout ",
+    "git switch ",
+    "git restore ",
+    "git stash",
+    "git tag",
 )
 
 
@@ -229,7 +270,7 @@ def tool_policy(
             reason=f"This creates directory `{path}`.",
         )
 
-    if name in {"rollback_last_change", "rollback_change"}:
+    if name in {"rollback_last_change", "rollback_change", "rollback_paths"}:
         path_count = int(display_args.get("path_count", 0) or 0)
         superseded = int(display_args.get("superseded_active_count", 0) or 0)
         if superseded > 0 or path_count >= 4:
@@ -262,6 +303,8 @@ def _build_tool_policy(
     reason: str,
     destructive: bool = False,
     approval_required: bool | None = None,
+    categories: list[str] | None = None,
+    factors: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     normalized = str(level or "medium").strip().lower()
     if normalized not in RISK_LEVELS:
@@ -274,6 +317,8 @@ def _build_tool_policy(
         "approval_required": bool(approval_required),
         "destructive": bool(destructive),
         "reason": reason.strip() or "This action changes the workspace.",
+        "risk_categories": _dedupe_strings(categories or []),
+        "risk_factors": factors or [],
     }
 
 
@@ -309,10 +354,13 @@ def _command_tool_policy(args: dict[str, Any], display_args: dict[str, Any]) -> 
     command = str(display_args.get("command") or args.get("command") or "")
     cwd = str(display_args.get("cwd") or args.get("cwd") or ".")
     normalized = _normalize_command(command)
+    categories: list[str] = []
+    factors: list[dict[str, str]] = []
     if not normalized:
         return _build_tool_policy(
             level="medium",
             reason="This command could not be classified.",
+            categories=["unknown_command"],
         )
 
     for pattern in CRITICAL_COMMAND_PATTERNS:
@@ -321,6 +369,8 @@ def _command_tool_policy(args: dict[str, Any], display_args: dict[str, Any]) -> 
                 level="critical",
                 destructive=True,
                 reason=f"This command includes a destructive shell pattern: `{pattern}`.",
+                categories=["destructive_delete"],
+                factors=[_factor("destructive_pattern", pattern)],
             )
 
     if re.search(r"(^| )(del|erase|rm|rd|rmdir|remove-item)( |$)", normalized):
@@ -328,36 +378,113 @@ def _command_tool_policy(args: dict[str, Any], display_args: dict[str, Any]) -> 
             level="critical",
             destructive=True,
             reason="This command may delete files or folders.",
+            categories=["destructive_delete"],
+            factors=[_factor("delete_command", command)],
         )
 
     if any(token in normalized for token in ("&&", "||", ";")):
+        categories.append("chained_shell")
+        factors.append(_factor("shell_chain", "Command uses shell chaining."))
         return _build_tool_policy(
             level="high",
             reason="This is a chained shell command, which is harder to predict and review.",
+            categories=categories,
+            factors=factors,
         )
 
     if any(token in normalized for token in (">", ">>")):
+        categories.append("redirection")
+        factors.append(_factor("shell_redirection", "Command writes through shell redirection."))
         return _build_tool_policy(
             level="high",
             reason="This command writes output through shell redirection.",
+            categories=categories,
+            factors=factors,
         )
+
+    for pattern in DEPENDENCY_COMMAND_PATTERNS:
+        if pattern in normalized:
+            return _build_tool_policy(
+                level="high",
+                reason=f"This command changes installed dependencies or the environment: `{pattern}`.",
+                categories=["dependency_change"],
+                factors=[_factor("dependency_command", pattern)],
+            )
+
+    for pattern in GIT_WRITE_COMMAND_PATTERNS:
+        if pattern in normalized:
+            return _build_tool_policy(
+                level="high",
+                reason=f"This command changes Git repository state: `{pattern}`.",
+                categories=["git_write"],
+                factors=[_factor("git_write_command", pattern)],
+            )
+
+    for pattern in NETWORK_COMMAND_PATTERNS:
+        if pattern in normalized:
+            return _build_tool_policy(
+                level="high",
+                reason=f"This command can access the network: `{pattern}`.",
+                categories=["network"],
+                factors=[_factor("network_command", pattern)],
+            )
 
     for pattern in HIGH_RISK_COMMAND_PATTERNS:
         if pattern in normalized:
             return _build_tool_policy(
                 level="high",
                 reason=f"This command changes the environment or repository state: `{pattern}`.",
+                categories=["state_change"],
+                factors=[_factor("high_risk_pattern", pattern)],
             )
 
     for pattern in SAFE_COMMAND_PATTERNS:
         if re.search(pattern, normalized):
+            category = "validation" if _looks_like_validation_command(normalized) else "read_only"
             return _build_tool_policy(
                 level="low",
                 approval_required=False,
                 reason=f"This looks like a read-only or validation command in `{cwd}`.",
+                categories=[category],
+                factors=[_factor("safe_pattern", pattern)],
             )
 
     return _build_tool_policy(
         level="medium",
         reason=f"This command runs arbitrary shell code in `{cwd}` and should be reviewed once.",
+        categories=["arbitrary_shell"],
+        factors=[_factor("unclassified_command", command)],
     )
+
+
+def _factor(kind: str, detail: str) -> dict[str, str]:
+    return {"kind": kind, "detail": detail}
+
+
+def _looks_like_validation_command(normalized: str) -> bool:
+    validation_terms = (
+        "pytest",
+        "py_compile",
+        "compileall",
+        "ruff",
+        "mypy",
+        "lint",
+        "test",
+        "typecheck",
+        "build",
+        "cargo test",
+        "go test",
+    )
+    return any(term in normalized for term in validation_terms)
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result

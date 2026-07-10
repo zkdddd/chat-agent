@@ -101,6 +101,34 @@ def tool_display_args(workspace: Any, name: str, args: dict[str, Any]) -> dict[s
             "superseded_active_count": preview["superseded_active_count"],
         }
 
+    if name == "preview_rollback_session":
+        preview = workspace.preview_rollback_session(
+            limit=int(args.get("limit", 50)),
+        )
+        return {
+            "available": preview["available"],
+            "path_count": preview["path_count"],
+            "paths": preview["paths"][:12],
+            "paths_truncated": len(preview["paths"]) > 12,
+            "rollback_ids": preview.get("rollback_ids", [])[:12],
+            "preview_truncated": preview["preview_truncated"],
+        }
+
+    if name == "preview_rollback_paths":
+        preview = workspace.preview_rollback_paths(
+            paths=[str(path) for path in args.get("paths", [])],
+            rollback_id=args.get("rollback_id"),
+        )
+        return {
+            "available": preview["available"],
+            "path_count": preview["path_count"],
+            "paths": preview["paths"][:12],
+            "paths_truncated": len(preview["paths"]) > 12,
+            "missing_paths": preview.get("missing_paths", []),
+            "rollback_ids": preview.get("rollback_ids", []),
+            "preview_truncated": preview["preview_truncated"],
+        }
+
     if name == "rollback_last_change":
         preview = workspace.preview_rollback_last_change()
         return {
@@ -128,6 +156,20 @@ def tool_display_args(workspace: Any, name: str, args: dict[str, Any]) -> dict[s
             "paths": preview["paths"][:12],
             "paths_truncated": len(preview["paths"]) > 12,
             "superseded_active_count": preview["superseded_active_count"],
+        }
+
+    if name == "rollback_paths":
+        preview = workspace.preview_rollback_paths(
+            paths=[str(path) for path in args.get("paths", [])],
+            rollback_id=args.get("rollback_id"),
+        )
+        return {
+            "available": preview["available"],
+            "path_count": preview["path_count"],
+            "paths": preview["paths"][:12],
+            "paths_truncated": len(preview["paths"]) > 12,
+            "missing_paths": preview.get("missing_paths", []),
+            "rollback_ids": preview.get("rollback_ids", []),
         }
 
     if name != "apply_patch":
@@ -195,12 +237,29 @@ def tool_preview_text(workspace: Any, name: str, args: dict[str, Any]) -> str | 
             rollback_id=int(args["rollback_id"]),
         )
         return str(preview["preview"])
+    if name == "preview_rollback_session":
+        preview = workspace.preview_rollback_session(
+            limit=int(args.get("limit", 50)),
+        )
+        return str(preview["preview"])
+    if name == "preview_rollback_paths":
+        preview = workspace.preview_rollback_paths(
+            paths=[str(path) for path in args.get("paths", [])],
+            rollback_id=args.get("rollback_id"),
+        )
+        return str(preview["preview"])
     if name == "rollback_last_change":
         preview = workspace.preview_rollback_last_change()
         return str(preview["preview"])
     if name == "rollback_change":
         preview = workspace.preview_rollback_change(
             rollback_id=int(args["rollback_id"]),
+        )
+        return str(preview["preview"])
+    if name == "rollback_paths":
+        preview = workspace.preview_rollback_paths(
+            paths=[str(path) for path in args.get("paths", [])],
+            rollback_id=args.get("rollback_id"),
         )
         return str(preview["preview"])
     return None
@@ -231,6 +290,7 @@ def tool_report_section(
                         "risk_level": policy.get("risk_level"),
                         "approval_required": policy.get("approval_required"),
                         "destructive": policy.get("destructive"),
+                        "risk_categories": policy.get("risk_categories"),
                         "reason": policy.get("reason"),
                     }
                 ),

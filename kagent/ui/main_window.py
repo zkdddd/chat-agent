@@ -36,6 +36,8 @@ from dotenv import set_key
 from .. import config as app_config
 from .. import db
 from ..agent import WorkspaceTools
+from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
+from ..agent.run_self_check import format_run_health_report
 from ..config import MODEL
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
@@ -400,6 +402,35 @@ def _rollback_change_type_label(action: str) -> str:
         "replace_item": "Replace item",
     }
     return mapping.get(str(action or "").strip(), str(action or "Change"))
+
+
+def _run_timeline_markdown(run_log_path: str, *, limit: int = 80) -> str:
+    timeline = run_log_timeline(run_log_path)
+    lines = ["### Run Timeline", ""]
+    for item in timeline[:limit]:
+        title = str(item.get("title") or item.get("event") or "event")
+        timestamp = str(item.get("timestamp") or "")
+        detail = str(item.get("detail") or "").strip()
+        line = f"- `{timestamp}` {title}" if timestamp else f"- {title}"
+        if detail:
+            line += f" - {detail}"
+        lines.append(line)
+    if len(timeline) > limit:
+        lines.append(f"- ... {len(timeline) - limit} more event(s)")
+    return "\n".join(lines)
+
+
+def _run_debug_markdown(run_log_path: str, mode: str) -> str:
+    if mode == "timeline":
+        return _run_timeline_markdown(run_log_path)
+    return "\n\n".join(
+        [
+            "### Run Summary",
+            f"```text\n{summarize_run_for_display(run_log_path)}\n```",
+            "### Self Check",
+            f"```text\n{format_run_health_report(run_log_path)}\n```",
+        ]
+    )
 
 
 def _tool_entry_actions(
@@ -1156,6 +1187,9 @@ class ToolTraceCard(QFrame):
         super().__init__()
         self._width = width
         self._entries: dict[str, ToolLogEntry] = {}
+        self._run_id = ""
+        self._run_log_path = ""
+        self._trust: dict[str, Any] | None = None
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         self.setFixedWidth(width)
         self.setStyleSheet(
@@ -1192,6 +1226,28 @@ class ToolTraceCard(QFrame):
         header.addWidget(self.state_chip)
         layout.addLayout(header)
 
+        debug_row = QHBoxLayout()
+        debug_row.setSpacing(8)
+        self.run_meta_label = QLabel("")
+        self.run_meta_label.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11px;")
+        self.run_meta_label.setWordWrap(True)
+        debug_row.addWidget(self.run_meta_label, 1)
+
+        self.run_summary_btn = QPushButton("日志摘要")
+        self.run_timeline_btn = QPushButton("时间线")
+        for btn in (self.run_summary_btn, self.run_timeline_btn):
+            btn.setEnabled(False)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "background: rgba(255, 255, 255, 0.04); color: #CBD5E1; "
+                f"border: 1px solid {C_BORDER}; border-radius: 10px; "
+                "padding: 5px 9px; font-size: 11px; font-weight: 700;"
+            )
+            debug_row.addWidget(btn)
+        self.run_summary_btn.clicked.connect(lambda: self._request_run_debug("summary"))
+        self.run_timeline_btn.clicked.connect(lambda: self._request_run_debug("timeline"))
+        layout.addLayout(debug_row)
+
         self.entries_layout = QVBoxLayout()
         self.entries_layout.setSpacing(10)
         layout.addLayout(self.entries_layout)
@@ -1200,6 +1256,38 @@ class ToolTraceCard(QFrame):
         self.empty_label.setWordWrap(True)
         self.empty_label.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 12px;")
         layout.addWidget(self.empty_label)
+
+    def set_run_info(self, run_id: str, run_log_path: str) -> None:
+        self._run_id = str(run_id or "")
+        self._run_log_path = str(run_log_path or "")
+        self.run_summary_btn.setEnabled(bool(self._run_log_path))
+        self.run_timeline_btn.setEnabled(bool(self._run_log_path))
+        self._refresh_run_meta()
+
+    def set_trust_summary(self, trust: dict[str, Any]) -> None:
+        self._trust = dict(trust)
+        self._refresh_run_meta()
+
+    def _refresh_run_meta(self) -> None:
+        parts = []
+        if self._run_id:
+            parts.append(f"run: {self._run_id[:10]}")
+        if self._trust:
+            health = str(self._trust.get("health") or "unknown")
+            validated = "yes" if self._trust.get("validated") else "no"
+            parts.append(f"health: {health}")
+            parts.append(f"validated: {validated}")
+        self.run_meta_label.setText(" | ".join(parts) if parts else "等待运行日志")
+
+    def _request_run_debug(self, mode: str) -> None:
+        self.action_requested.emit(
+            {
+                "action": "show_run_debug",
+                "mode": mode,
+                "run_id": self._run_id,
+                "run_log_path": self._run_log_path,
+            }
+        )
 
     def _sync_empty(self):
         has_entries = bool(self._entries)
@@ -2480,7 +2568,22 @@ QListWidget::item:selected {{
     def _apply_tool_event(self, trace: ToolTraceCard, event: dict[str, Any]):
         event_type = str(event.get("type", "")).strip()
         if event_type == "agent_start":
+            trace.set_run_info(
+                run_id=str(event.get("run_id") or ""),
+                run_log_path=str(event.get("run_log_path") or ""),
+            )
             trace.set_state("Analyzing", kind="active")
+            return
+        if event_type == "final_trust_check":
+            trust = event.get("trust") if isinstance(event.get("trust"), dict) else {}
+            trace.set_trust_summary(trust)
+            health = str(trust.get("health") or "").strip()
+            if health == "fail":
+                trace.set_state("需要注意", kind="error")
+            elif health == "warn":
+                trace.set_state("有风险", kind="active")
+            elif health == "pass":
+                trace.set_state("可信", kind="done")
             return
         if event_type == "agent_status":
             status_text = str(event.get("status") or "").strip()
@@ -2697,6 +2800,10 @@ QListWidget::item:selected {{
 
     def _handle_trace_action(self, action: object) -> None:
         payload = action if isinstance(action, dict) else {}
+        action_name = str(payload.get("action") or "").strip()
+        if action_name == "show_run_debug":
+            self._show_run_debug(payload)
+            return
         prompt = str(payload.get("prompt") or "").strip()
         if not prompt:
             return
@@ -2704,6 +2811,44 @@ QListWidget::item:selected {{
             QMessageBox.information(self, "kagent", "当前任务还在执行，先等它完成再点这个操作。")
             return
         self._submit_text(prompt, clear_input=False)
+
+    def _show_run_debug(self, payload: dict[str, Any]) -> None:
+        run_log_path = str(payload.get("run_log_path") or "").strip()
+        mode = str(payload.get("mode") or "summary").strip()
+        if not run_log_path:
+            QMessageBox.information(self, "kagent", "当前运行还没有可用日志路径。")
+            return
+        try:
+            markdown = _run_debug_markdown(run_log_path, mode)
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", f"读取运行日志失败：{exc}")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Agent 运行调试")
+        dialog.resize(760, 620)
+        dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(f"Run log: {Path(run_log_path).name}")
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
+        layout.addWidget(title)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setStyleSheet(
+            f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+            f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 10px;"
+        )
+        view.setHtml(render(markdown))
+        layout.addWidget(view, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
 
     # ==================== State ====================
