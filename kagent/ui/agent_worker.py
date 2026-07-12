@@ -22,11 +22,18 @@ class AgentWorker(QThread):
     error = pyqtSignal(str)
     title_ready = pyqtSignal(str)
 
-    def __init__(self, session_id: str, message: str, history: list[dict]):
+    def __init__(
+        self,
+        session_id: str,
+        message: str,
+        history: list[dict],
+        workspace_root: str | None = None,
+    ):
         super().__init__()
         self.session_id = session_id
         self.message = message
         self.history = history
+        self.workspace_root = workspace_root
         self._stop = False
         self._approval_lock = threading.Lock()
         self._approval_waiters: dict[str, dict[str, object]] = {}
@@ -164,8 +171,22 @@ class AgentWorker(QThread):
                     }
                 )
 
+            if not self.workspace_root:
+                chunks: list[str] = []
+                for chunk in llm.stream_chat(agent_history):
+                    if self._stop:
+                        break
+                    chunks.append(chunk)
+                    self.chunk.emit(chunk)
+                answer = "" if self._stop else "".join(chunks).strip()
+                if answer and not self._stop:
+                    db.save_message(self.session_id, "assistant", answer)
+                self.done.emit(answer)
+                return
+
             agent = CodeAgent(
                 confirm_tool=self._confirm_tool,
+                workspace_root=self.workspace_root,
                 session_id=self.session_id,
             )
             report = agent.run(

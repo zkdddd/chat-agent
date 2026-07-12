@@ -96,11 +96,24 @@ def latest_run_log(runs_dir: str | Path | None = None) -> Path | None:
     logs = [path for path in root.glob("*.jsonl") if path.is_file()]
     if not logs:
         return None
-    return max(logs, key=lambda path: (path.stat().st_mtime, path.name))
+    return max(logs, key=_run_log_sort_key)
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _run_log_sort_key(path: Path) -> tuple[str, int, str]:
+    timestamp = ""
+    try:
+        events = read_run_events(path)
+    except ValueError:
+        events = []
+    for event in reversed(events):
+        if event.get("timestamp"):
+            timestamp = str(event["timestamp"])
+            break
+    return (timestamp, path.stat().st_mtime_ns, path.name)
 
 
 def _event_data(event: dict[str, Any] | None) -> dict[str, Any]:

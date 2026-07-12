@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -38,6 +39,7 @@ from .. import db
 from ..agent import WorkspaceTools
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_self_check import format_run_health_report
+from ..agent.task_resume import build_resume_context, format_resume_context
 from ..config import MODEL
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
@@ -73,7 +75,7 @@ UI_TEXT = {
         "settings_heading": "应用设置",
         "language": "语言",
         "language_zh": "中文",
-        "language_en": "English",
+        "language_en": "英文",
         "read_scope": "读取范围",
         "write_scope": "写入范围",
         "command_scope": "命令范围",
@@ -98,8 +100,23 @@ UI_TEXT = {
         "open_in_chat": "在聊天中打开",
         "restore": "恢复",
         "history": "历史",
+        "diff_review": "差异",
         "workspace": "工作区",
-        "new_chat": "+  新建会话",
+        "switch_workspace": "切换工作区",
+        "select_workspace": "选择工作区",
+        "workspace_changed": "当前会话工作区已更新。",
+        "workspace_missing": "工作区不存在：{path}",
+        "workspace_label": "工作区：{path}",
+        "workspace_button_label": "当前项目：{name}",
+        "workspace_button_tooltip": "点击切换当前会话的目标项目：{path}",
+        "new_chat": "+  新增会话",
+        "new_chat_for_folder": "+  选择文件夹新建会话",
+        "select_workspace_for_new_chat": "选择新会话的工作区",
+        "clear_workspace": "不选择文件夹",
+        "no_project": "未选择项目",
+        "no_project_label": "项目：未选择",
+        "no_project_tooltip": "当前会话未绑定项目，将作为普通聊天使用。",
+        "no_project_for_workspace_action": "当前会话没有绑定项目，请先选择项目。",
         "input_hint": "用自然语言描述任务，Agent 会自己决定是否读取文件、修改代码和执行命令",
         "send": "发送",
         "stop": "停止",
@@ -115,13 +132,123 @@ UI_TEXT = {
         "no_active_session": "没有活动会话",
         "no_rollback_history": "暂无回滚历史",
         "entries": "条记录",
+        "just_now": "刚刚",
+        "you": "你",
+        "thinking": "正在思考…",
+        "preparing_reply": "准备回复…",
+        "truncated": "已截断",
+        "error_prefix": "错误",
+        "search_prefix": "搜索",
+        "run_timeline": "运行时间线",
+        "run_summary": "运行摘要",
+        "self_check": "自检结果",
+        "current_diff_review": "当前差异审查",
+        "status": "状态",
+        "summary": "摘要",
+        "files": "文件",
+        "missing_paths": "缺失路径",
+        "available": "可用",
+        "empty": "空",
+        "no_active_rollbackable_changes": "当前会话没有可回滚的活跃变更。",
+        "resume_task": "恢复任务",
+        "resume_prompt_intro": "根据下面的恢复上下文继续上一次 Agent 任务。",
+        "resume_prompt_no_restart": "除非上下文明显不可用，否则不要从头开始。",
+        "resume_prompt_verify_first": "先核对当前工作区状态，然后继续最高优先级的下一步。",
+        "busy_action_message": "当前任务还在执行，请先等待完成。",
+        "no_run_log_path": "当前运行还没有可用日志路径。",
+        "read_run_log_failed": "读取运行日志失败：{error}",
+        "run_debug_title": "Agent 运行调试",
+        "run_log_label": "运行日志：{name}",
+        "build_resume_context_failed": "生成恢复上下文失败：{error}",
+        "diff_review_failed": "差异审查失败：{error}",
+        "agent_run_log": "Agent 执行日志",
+        "waiting_tool_call": "等待工具调用",
+        "log_summary": "日志摘要",
+        "timeline": "时间线",
+        "agent_analyzing_tools": "Agent 正在分析任务，工具调用会显示在这里。",
+        "waiting_run_log": "等待运行日志",
+        "validated_yes": "是",
+        "validated_no": "否",
+        "tool_detail_expand": "展开工具详情",
+        "tool_detail_collapse": "收起工具详情",
+        "waiting_tool_output": "等待工具输出...",
+        "approval_required": "需要你的确认后继续执行",
+        "approval_required_detail": "需要确认：{label}。{reason}",
+        "approval_required_label_only": "需要确认：{label}。",
+        "allow": "允许",
+        "reject": "拒绝",
+        "approved_continuing": "已允许，继续执行中…",
+        "rejected_returning": "已拒绝，正在返回结果…",
+        "quick_actions": "快捷操作",
+        "execute": "执行",
+        "round_label": "第 {round} 轮",
+        "tool_status_preview": "预览",
+        "tool_status_running": "执行中",
+        "tool_status_success": "成功",
+        "tool_status_failed": "失败",
+        "tool_previewing": "{name} 预览中",
+        "tool_running": "{name} 执行中",
+        "tool_done": "{name} 已完成",
+        "tool_failed": "{name} 执行失败",
+        "tool_field_round": "轮次",
+        "tool_field_status": "状态",
+        "tool_field_risk": "风险",
+        "tool_field_why": "原因",
+        "tool_field_preview": "预览",
+        "tool_field_input": "输入",
+        "tool_field_result": "结果",
+        "tool_action_diff": "差异 #{rollback_id}",
+        "tool_action_restore": "恢复 #{rollback_id}",
+        "tool_action_restore_this": "恢复这个版本",
+        "tool_action_undo_rollback": "撤销这次回滚",
+        "tool_prompt_preview_rollback_change": "请直接调用 preview_rollback_change 工具，参数 rollback_id={rollback_id}，只展示差异预览，不要执行回滚。",
+        "tool_prompt_rollback_change": "请直接调用 rollback_change 工具，参数 rollback_id={rollback_id}，恢复到这个版本，然后给我结果。",
+        "tool_prompt_undo_rollback": "请直接调用 rollback_change 工具，参数 rollback_id={rollback_id}，撤销刚才那次回滚，然后给我结果。",
+        "rollback_status_meta": "状态：{status} | 文件：{files} | 创建时间：{created}",
+        "unknown_path": "未知路径",
+        "no_file_details": "没有可用的文件详情",
+        "rollback_title": "回滚 #{rollback_id}",
+        "rollback_preview_prompt": "请调用 preview_rollback_change 工具，参数 rollback_id={rollback_id}。只展示差异预览，不要执行任何回滚。",
+        "rollback_restore_prompt": "请调用 rollback_change 工具，参数 rollback_id={rollback_id}。恢复到这个版本，然后告诉我结果。",
+        "empty_subtitle": "像正式产品一样的聊天界面，支持流式回复、Markdown 渲染和 Agent 工具。",
+        "feature_streaming": "流式回复",
+        "feature_multi_turn": "多轮对话",
+        "feature_agent_tools": "Agent 工具",
+        "input_shortcut_hint": "Enter 发送 · Shift+Enter 换行",
+        "new_session": "新会话",
+        "delete_session_title": "删除会话",
+        "delete_session_confirm": "确定删除「{title}」吗？",
+        "busy_delete_session": "当前任务正在执行中，暂时不能删除会话。",
+        "trust_attention": "需要注意",
+        "trust_risky": "有风险",
+        "trustworthy": "可信",
+        "waiting_confirmation": "等待确认",
+        "analyzing": "分析中",
+        "done": "完成",
+        "failed": "失败",
+        "call_failed": "调用失败：\n\n{error}",
+        "change_update": "文本更新",
+        "change_restore_file": "恢复文件",
+        "change_delete_file": "删除文件",
+        "change_restore_directory": "恢复文件夹",
+        "change_delete_directory": "删除文件夹",
+        "change_replace_binary": "替换二进制文件",
+        "change_replace_item": "替换项目",
+        "local_coding_workspace": "本地代码工作区",
+        "more": "更多",
+        "settings_dev": "设置（开发中）",
+        "feature_in_development": "这个功能还在开发中。",
+        "sidebar_shortcuts": "Ctrl+N 当前项目新建 · Delete 删除",
+        "scroll_bottom": "回到底部",
+        "agent_mode_tip": "切换为代码 Agent：可读文件、改文件、运行命令",
+        "rollback_history_title": "回滚历史",
     },
     "en": {
         "settings": "Settings",
         "settings_title": "Settings",
         "settings_heading": "App Settings",
         "language": "Language",
-        "language_zh": "中文",
+        "language_zh": "Chinese",
         "language_en": "English",
         "read_scope": "Read scope",
         "write_scope": "Write scope",
@@ -147,8 +274,23 @@ UI_TEXT = {
         "open_in_chat": "Open In Chat",
         "restore": "Restore",
         "history": "History",
+        "diff_review": "Diff",
         "workspace": "Workspace",
+        "switch_workspace": "Switch workspace",
+        "select_workspace": "Select workspace",
+        "workspace_changed": "Current chat workspace updated.",
+        "workspace_missing": "Workspace does not exist: {path}",
+        "workspace_label": "Workspace: {path}",
+        "workspace_button_label": "Project: {name}",
+        "workspace_button_tooltip": "Click to switch the target project for this chat: {path}",
         "new_chat": "+  New chat",
+        "new_chat_for_folder": "+  New chat from folder",
+        "select_workspace_for_new_chat": "Select workspace for new chat",
+        "clear_workspace": "No folder",
+        "no_project": "No project selected",
+        "no_project_label": "Project: none",
+        "no_project_tooltip": "This chat is not bound to a project and will use normal chat.",
+        "no_project_for_workspace_action": "This chat has no project. Select a project first.",
         "input_hint": "Describe a task. Agent can read files, edit code, and run commands when needed.",
         "send": "Send",
         "stop": "Stop",
@@ -164,6 +306,116 @@ UI_TEXT = {
         "no_active_session": "No active session",
         "no_rollback_history": "No rollback history yet",
         "entries": "entries",
+        "just_now": "Just now",
+        "you": "You",
+        "thinking": "Thinking...",
+        "preparing_reply": "Preparing reply...",
+        "truncated": "truncated",
+        "error_prefix": "Error",
+        "search_prefix": "Search",
+        "run_timeline": "Run Timeline",
+        "run_summary": "Run Summary",
+        "self_check": "Self Check",
+        "current_diff_review": "Current Diff Review",
+        "status": "Status",
+        "summary": "Summary",
+        "files": "Files",
+        "missing_paths": "Missing paths",
+        "available": "available",
+        "empty": "empty",
+        "no_active_rollbackable_changes": "No active rollbackable changes in this session.",
+        "resume_task": "Resume Task",
+        "resume_prompt_intro": "Continue the previous Agent task using this resume context.",
+        "resume_prompt_no_restart": "Do not restart from scratch unless the context is clearly unusable.",
+        "resume_prompt_verify_first": "First verify the current workspace state, then continue with the highest-priority next step.",
+        "busy_action_message": "Current task is still running. Wait for it to finish first.",
+        "no_run_log_path": "The current run has no available log path yet.",
+        "read_run_log_failed": "Read run log failed: {error}",
+        "run_debug_title": "Agent Run Debug",
+        "run_log_label": "Run log: {name}",
+        "build_resume_context_failed": "Build resume context failed: {error}",
+        "diff_review_failed": "Diff review failed: {error}",
+        "agent_run_log": "Agent Run Log",
+        "waiting_tool_call": "Waiting for tool calls",
+        "log_summary": "Log Summary",
+        "timeline": "Timeline",
+        "agent_analyzing_tools": "Agent is analyzing the task. Tool calls will appear here.",
+        "waiting_run_log": "Waiting for run log",
+        "validated_yes": "yes",
+        "validated_no": "no",
+        "tool_detail_expand": "Expand tool details",
+        "tool_detail_collapse": "Collapse tool details",
+        "waiting_tool_output": "Waiting for tool output...",
+        "approval_required": "Approval required before continuing",
+        "approval_required_detail": "Approval required: {label}. {reason}",
+        "approval_required_label_only": "Approval required: {label}.",
+        "allow": "Allow",
+        "reject": "Reject",
+        "approved_continuing": "Approved. Continuing...",
+        "rejected_returning": "Rejected. Returning result...",
+        "quick_actions": "Quick Actions",
+        "execute": "Run",
+        "round_label": "Round {round}",
+        "tool_status_preview": "Preview",
+        "tool_status_running": "Running",
+        "tool_status_success": "Success",
+        "tool_status_failed": "Failed",
+        "tool_previewing": "{name} previewing",
+        "tool_running": "{name} running",
+        "tool_done": "{name} completed",
+        "tool_failed": "{name} failed",
+        "tool_field_round": "Round",
+        "tool_field_status": "Status",
+        "tool_field_risk": "Risk",
+        "tool_field_why": "Why",
+        "tool_field_preview": "Preview",
+        "tool_field_input": "Input",
+        "tool_field_result": "Result",
+        "tool_action_diff": "Diff #{rollback_id}",
+        "tool_action_restore": "Restore #{rollback_id}",
+        "tool_action_restore_this": "Restore this version",
+        "tool_action_undo_rollback": "Undo this rollback",
+        "tool_prompt_preview_rollback_change": "Call the preview_rollback_change tool with rollback_id={rollback_id}. Show the diff preview only and do not perform any rollback.",
+        "tool_prompt_rollback_change": "Call the rollback_change tool with rollback_id={rollback_id}. Restore that version and then tell me the result.",
+        "tool_prompt_undo_rollback": "Call the rollback_change tool with rollback_id={rollback_id}. Undo the previous rollback and then tell me the result.",
+        "rollback_status_meta": "Status: {status} | Files: {files} | Created: {created}",
+        "unknown_path": "unknown path",
+        "no_file_details": "No file details available",
+        "rollback_title": "Rollback #{rollback_id}",
+        "rollback_preview_prompt": "Call the preview_rollback_change tool with rollback_id={rollback_id}. Show the diff preview only and do not perform any rollback.",
+        "rollback_restore_prompt": "Call the rollback_change tool with rollback_id={rollback_id}. Restore that version and then tell me the result.",
+        "empty_subtitle": "A polished chat interface with streaming replies, Markdown rendering, and Agent tools.",
+        "feature_streaming": "Streaming replies",
+        "feature_multi_turn": "Multi-turn chat",
+        "feature_agent_tools": "Agent tools",
+        "input_shortcut_hint": "Enter to send · Shift+Enter for newline",
+        "new_session": "New chat",
+        "delete_session_title": "Delete Chat",
+        "delete_session_confirm": "Delete \"{title}\"?",
+        "busy_delete_session": "Current task is still running, so the chat cannot be deleted yet.",
+        "trust_attention": "Needs attention",
+        "trust_risky": "Risky",
+        "trustworthy": "Trusted",
+        "waiting_confirmation": "Waiting for approval",
+        "analyzing": "Analyzing",
+        "done": "Done",
+        "failed": "Failed",
+        "call_failed": "Call failed:\n\n{error}",
+        "change_update": "Text update",
+        "change_restore_file": "Restore file",
+        "change_delete_file": "Delete file",
+        "change_restore_directory": "Restore folder",
+        "change_delete_directory": "Delete folder",
+        "change_replace_binary": "Replace binary",
+        "change_replace_item": "Replace item",
+        "local_coding_workspace": "Local coding workspace",
+        "more": "More",
+        "settings_dev": "Settings (in development)",
+        "feature_in_development": "This feature is still in development.",
+        "sidebar_shortcuts": "Ctrl+N Current project · Delete Remove",
+        "scroll_bottom": "Scroll to bottom",
+        "agent_mode_tip": "Switch to coding Agent: read files, edit files, and run commands",
+        "rollback_history_title": "Rollback History",
     },
 }
 
@@ -176,6 +428,10 @@ def _language_code(value: str | None = None) -> str:
 def _t(key: str) -> str:
     lang = _language_code()
     return UI_TEXT.get(lang, UI_TEXT["zh"]).get(key, UI_TEXT["zh"].get(key, key))
+
+
+def _tf(key: str, **kwargs: Any) -> str:
+    return _t(key).format(**kwargs)
 
 
 MESSAGE_BODY_STYLE = (
@@ -294,7 +550,7 @@ img {
 
 def _format_message_time(created_at: str | None) -> str:
     if not created_at:
-        return "刚刚"
+        return _t("just_now")
     raw = str(created_at).strip().replace("T", " ")
     try:
         return datetime.fromisoformat(raw).strftime("%H:%M")
@@ -351,7 +607,7 @@ def _body_width_for_card(viewport_width: int, role: str, text: str) -> int:
 def _pretty_json(value: Any, limit: int = 2600) -> str:
     text = json.dumps(value, ensure_ascii=False, indent=2)
     if len(text) > limit:
-        return text[:limit] + "\n... (truncated)"
+        return text[:limit] + f"\n... ({_t('truncated')})"
     return text
 
 
@@ -393,20 +649,20 @@ def _tool_policy_reason(policy: dict[str, Any] | None) -> str:
 
 def _rollback_change_type_label(action: str) -> str:
     mapping = {
-        "update": "Text update",
-        "restore_file": "Restore file",
-        "delete_file": "Delete file",
-        "restore_directory": "Restore folder",
-        "delete_directory": "Delete folder",
-        "replace_binary": "Replace binary",
-        "replace_item": "Replace item",
+        "update": _t("change_update"),
+        "restore_file": _t("change_restore_file"),
+        "delete_file": _t("change_delete_file"),
+        "restore_directory": _t("change_restore_directory"),
+        "delete_directory": _t("change_delete_directory"),
+        "replace_binary": _t("change_replace_binary"),
+        "replace_item": _t("change_replace_item"),
     }
     return mapping.get(str(action or "").strip(), str(action or "Change"))
 
 
 def _run_timeline_markdown(run_log_path: str, *, limit: int = 80) -> str:
     timeline = run_log_timeline(run_log_path)
-    lines = ["### Run Timeline", ""]
+    lines = [f"### {_t('run_timeline')}", ""]
     for item in timeline[:limit]:
         title = str(item.get("title") or item.get("event") or "event")
         timestamp = str(item.get("timestamp") or "")
@@ -425,12 +681,69 @@ def _run_debug_markdown(run_log_path: str, mode: str) -> str:
         return _run_timeline_markdown(run_log_path)
     return "\n\n".join(
         [
-            "### Run Summary",
+            f"### {_t('run_summary')}",
             f"```text\n{summarize_run_for_display(run_log_path)}\n```",
-            "### Self Check",
+            f"### {_t('self_check')}",
             f"```text\n{format_run_health_report(run_log_path)}\n```",
         ]
     )
+
+
+def _diff_review_markdown(preview: dict[str, Any]) -> str:
+    paths = preview.get("paths") if isinstance(preview.get("paths"), list) else []
+    missing_paths = preview.get("missing_paths") if isinstance(preview.get("missing_paths"), list) else []
+    available = bool(preview.get("available", False))
+    preview_text = str(preview.get("preview") or "").strip()
+    summary = str(preview.get("summary") or "").strip()
+
+    lines = [f"### {_t('current_diff_review')}", ""]
+    lines.append(f"**{_t('status')}**: {_t('available') if available else _t('empty')}")
+    lines.append("")
+    if summary:
+        lines.append(f"**{_t('summary')}**: {summary}")
+        lines.append("")
+    lines.append(f"**{_t('files')}**: {len(paths)}")
+    lines.append("")
+    if paths:
+        for path in paths:
+            lines.append(f"- `{path}`")
+    else:
+        lines.append(f"- {_t('no_active_rollbackable_changes')}")
+    if missing_paths:
+        lines.append("")
+        lines.append(f"**{_t('missing_paths')}**")
+        lines.append("")
+        for path in missing_paths:
+            lines.append(f"- `{path}`")
+    if preview_text:
+        lines.extend(["", _preview_markdown_block(preview_text)])
+    return "\n".join(lines)
+
+
+def _resume_task_prompt(context: dict[str, Any]) -> str:
+    return "\n\n".join(
+        [
+            _t("resume_prompt_intro"),
+            _t("resume_prompt_no_restart"),
+            _t("resume_prompt_verify_first"),
+            "```text",
+            format_resume_context(context),
+            "```",
+        ]
+    )
+
+
+def _session_title_for_workspace(path: str | Path) -> str:
+    root = Path(path)
+    return root.name or _t("new_session")
+
+
+def _workspace_button_label(path: str | Path) -> str:
+    if str(path).strip() == "":
+        return _t("no_project_label")
+    root = Path(path)
+    name = root.name or str(root)
+    return _tf("workspace_button_label", name=name)
 
 
 def _tool_entry_actions(
@@ -451,20 +764,18 @@ def _tool_entry_actions(
                 continue
             actions.append(
                 {
-                    "label": f"差异 #{rollback_id}",
+                    "label": _tf("tool_action_diff", rollback_id=rollback_id),
                     "prompt": (
-                        f"请直接调用 preview_rollback_change 工具，参数 rollback_id={int(rollback_id)}，"
-                        "只展示差异预览，不要执行回滚。"
+                        _tf("tool_prompt_preview_rollback_change", rollback_id=int(rollback_id))
                     ),
                 }
             )
             if bool(entry.get("available", False)):
                 actions.append(
                     {
-                        "label": f"恢复 #{rollback_id}",
+                        "label": _tf("tool_action_restore", rollback_id=rollback_id),
                         "prompt": (
-                            f"请直接调用 rollback_change 工具，参数 rollback_id={int(rollback_id)}，"
-                            "恢复到这个版本，然后给我结果。"
+                            _tf("tool_prompt_rollback_change", rollback_id=int(rollback_id))
                         ),
                     }
                 )
@@ -475,10 +786,9 @@ def _tool_entry_actions(
         if rollback_id and bool(result.get("available", False)):
             actions.append(
                 {
-                    "label": "恢复这个版本",
+                    "label": _t("tool_action_restore_this"),
                     "prompt": (
-                        f"请直接调用 rollback_change 工具，参数 rollback_id={int(rollback_id)}，"
-                        "恢复到这个版本，然后给我结果。"
+                        _tf("tool_prompt_rollback_change", rollback_id=int(rollback_id))
                     ),
                 }
             )
@@ -489,10 +799,9 @@ def _tool_entry_actions(
         if undo_rollback_id:
             actions.append(
                 {
-                    "label": "撤销这次回滚",
+                    "label": _t("tool_action_undo_rollback"),
                     "prompt": (
-                        f"请直接调用 rollback_change 工具，参数 rollback_id={int(undo_rollback_id)}，"
-                        "撤销刚才那次回滚，然后给我结果。"
+                        _tf("tool_prompt_undo_rollback", rollback_id=int(undo_rollback_id))
                     ),
                 }
             )
@@ -512,23 +821,23 @@ def _tool_event_markdown(
 ) -> str:
     parts: list[str] = [f"### `{name}`"]
     if round_idx is not None:
-        parts.append(f"**轮次** 第 {round_idx} 轮")
+        parts.append(f"**{_t('tool_field_round')}** {_tf('round_label', round=round_idx)}")
     if status:
-        parts.append(f"**状态** {status}")
+        parts.append(f"**{_t('tool_field_status')}** {status}")
     risk_label = _tool_policy_label(policy)
     risk_reason = _tool_policy_reason(policy)
     if risk_label:
-        parts.append(f"**Risk** {risk_label}")
+        parts.append(f"**{_t('tool_field_risk')}** {risk_label}")
     if risk_reason:
-        parts.append(f"**Why** {risk_reason}")
+        parts.append(f"**{_t('tool_field_why')}** {risk_reason}")
     if preview:
-        parts.append("**预览**")
+        parts.append(f"**{_t('tool_field_preview')}**")
         parts.append(_preview_markdown_block(preview))
     if args is not None:
-        parts.append("**输入**")
+        parts.append(f"**{_t('tool_field_input')}**")
         parts.append(f"```json\n{_pretty_json(args)}\n```")
     if result is not None:
-        parts.append("**结果**")
+        parts.append(f"**{_t('tool_field_result')}**")
         parts.append(f"```json\n{_pretty_json(result)}\n```")
     return "\n\n".join(parts)
 
@@ -564,7 +873,7 @@ def _tool_event_summary(
             return _single_line(f"rollback #{rollback_id}")
         error_text = str(result.get("error") or "").strip()
         if error_text:
-            return _single_line(f"错误：{error_text}")
+            return _single_line(f"{_t('error_prefix')}：{error_text}")
         if result.get("source_path") and result.get("target_path"):
             return _single_line(f"{result['source_path']} -> {result['target_path']}")
         if result.get("command"):
@@ -591,28 +900,28 @@ def _tool_event_summary(
         if args.get("path"):
             return _single_line(str(args["path"]))
         if args.get("query"):
-            return _single_line(f"搜索：{args['query']}")
+            return _single_line(f"{_t('search_prefix')}：{args['query']}")
 
     fallback = {
-        "预览": f"{name} 预览中",
-        "执行中": f"{name} 执行中",
-        "成功": f"{name} 已完成",
-        "失败": f"{name} 执行失败",
+        _t("tool_status_preview"): _tf("tool_previewing", name=name),
+        _t("tool_status_running"): _tf("tool_running", name=name),
+        _t("tool_status_success"): _tf("tool_done", name=name),
+        _t("tool_status_failed"): _tf("tool_failed", name=name),
     }
     return fallback.get(status, f"{name} {status}")
 
 
 def _assistant_body_html(content: str, streaming: bool, thinking: bool) -> str:
     if thinking:
-        body = '<span class="typing">正在思考…</span>'
+        body = f'<span class="typing">{html.escape(_t("thinking"))}</span>'
     elif streaming:
         body = html.escape(content).replace("\n", "<br>")
         if not body:
-            body = '<span class="typing">正在思考…</span>'
+            body = f'<span class="typing">{html.escape(_t("thinking"))}</span>'
     else:
         body = render(content)
         if not body:
-            body = '<span class="typing">准备回复…</span>'
+            body = f'<span class="typing">{html.escape(_t("preparing_reply"))}</span>'
     if streaming:
         body += '<span class="cursor">▍</span>'
     return body
@@ -703,7 +1012,7 @@ def _looks_like_agent_task(text: str) -> bool:
 class InputBox(QTextEdit):
     def __init__(self, on_send):
         super().__init__()
-        self.setPlaceholderText("描述你的任务，Agent 会读文件、改文件、运行命令… Enter 发送 · Shift+Enter 换行")
+        self.setPlaceholderText(_t("input_hint"))
         self.setMinimumHeight(62)
         self.setMaximumHeight(88)
         self.setFont(QFont("Microsoft YaHei", 10))
@@ -735,7 +1044,7 @@ class MessageBody(QTextBrowser):
         self.document().setDefaultStyleSheet(MESSAGE_BODY_STYLE)
 
     def set_content(self, html_text: str, width: int, text_color: str, streaming: bool = False):
-        body = html_text or '<span class="typing">正在思考…</span>'
+        body = html_text or f'<span class="typing">{html.escape(_t("thinking"))}</span>'
         width = max(220, width)
         self.setUpdatesEnabled(False)
         try:
@@ -776,7 +1085,7 @@ class MessageCard(QFrame):
             )
             text_color = "#F8FAFC"
             role_color = "#FCA5A5"
-            body_html = f'<div class="error-box">错误：{html.escape(content)}</div>'
+            body_html = f'<div class="error-box">{html.escape(_t("error_prefix"))}：{html.escape(content)}</div>'
         elif role == "assistant":
             style = (
                 "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
@@ -814,7 +1123,7 @@ class MessageCard(QFrame):
         header = QHBoxLayout()
         header.setSpacing(8)
 
-        role_label = QLabel("kagent" if role == "assistant" else "You")
+        role_label = QLabel("kagent" if role == "assistant" else _t("you"))
         role_label.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
         role_label.setStyleSheet(f"color: {role_color};")
 
@@ -853,7 +1162,7 @@ class ToolLogEntry(QFrame):
         self._width = width
         self._preview: str | None = None
         self._policy: dict[str, Any] | None = None
-        self._summary_full = "等待工具输出..."
+        self._summary_full = _t("waiting_tool_output")
         self._approval_pending = False
         self._actions: list[dict[str, str]] = []
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -874,7 +1183,7 @@ class ToolLogEntry(QFrame):
         self.toggle_btn.setCheckable(True)
         self.toggle_btn.setChecked(False)
         self.toggle_btn.setArrowType(Qt.ArrowType.RightArrow)
-        self.toggle_btn.setToolTip("展开工具详情")
+        self.toggle_btn.setToolTip(_t("tool_detail_expand"))
         self.toggle_btn.setAutoRaise(True)
         self.toggle_btn.clicked.connect(self._set_expanded)
 
@@ -892,7 +1201,7 @@ class ToolLogEntry(QFrame):
         self.summary_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.summary_label.setMinimumWidth(0)
 
-        self.status_chip = QLabel("执行中")
+        self.status_chip = QLabel(_t("tool_status_running"))
         self.status_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.status_chip.setStyleSheet(
@@ -909,7 +1218,7 @@ class ToolLogEntry(QFrame):
         header.addWidget(self.toggle_btn)
         header.addWidget(self.name_label)
         if round_idx is not None:
-            self.round_label.setText(f"第 {round_idx} 轮")
+            self.round_label.setText(_tf("round_label", round=round_idx))
             header.addWidget(self.round_label)
         header.addWidget(self.summary_label, 1)
         header.addStretch(1)
@@ -919,7 +1228,7 @@ class ToolLogEntry(QFrame):
 
         self.body = MessageBody()
         self.body.set_content(
-            '<span class="typing">等待工具输出...</span>',
+            f'<span class="typing">{html.escape(_t("waiting_tool_output"))}</span>',
             max(220, width - 24),
             text_color=C_TEXT_MAIN,
         )
@@ -931,10 +1240,10 @@ class ToolLogEntry(QFrame):
         approval_layout.setContentsMargins(0, 0, 0, 0)
         approval_layout.setSpacing(8)
 
-        self.approval_label = QLabel("需要你的确认后继续执行")
+        self.approval_label = QLabel(_t("approval_required"))
         self.approval_label.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 12px;")
 
-        self.allow_btn = QPushButton("Allow")
+        self.allow_btn = QPushButton(_t("allow"))
         self.allow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.allow_btn.setStyleSheet(
             "background: rgba(34, 197, 94, 0.16); color: #DCFCE7; "
@@ -943,7 +1252,7 @@ class ToolLogEntry(QFrame):
         )
         self.allow_btn.clicked.connect(lambda: self._submit_approval(True))
 
-        self.reject_btn = QPushButton("Reject")
+        self.reject_btn = QPushButton(_t("reject"))
         self.reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reject_btn.setStyleSheet(
             "background: rgba(248, 113, 113, 0.14); color: #FECACA; "
@@ -980,7 +1289,7 @@ class ToolLogEntry(QFrame):
         self.toggle_btn.setArrowType(
             Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
         )
-        self.toggle_btn.setToolTip("收起工具详情" if expanded else "展开工具详情")
+        self.toggle_btn.setToolTip(_t("tool_detail_collapse") if expanded else _t("tool_detail_expand"))
         self.updateGeometry()
 
     def _risk_chip_style(self, level: str) -> str:
@@ -1019,10 +1328,10 @@ class ToolLogEntry(QFrame):
         risk_label = _tool_policy_label(self._policy)
         risk_reason = _tool_policy_reason(self._policy)
         if risk_label and risk_reason:
-            return f"Approval required: {risk_label}. {risk_reason}"
+            return _tf("approval_required_detail", label=risk_label, reason=risk_reason)
         if risk_label:
-            return f"Approval required: {risk_label}."
-        return "Approval required before continuing."
+            return _tf("approval_required_label_only", label=risk_label)
+        return _t("approval_required")
 
     def _set_policy(self, policy: dict[str, Any] | None) -> None:
         self._policy = dict(policy) if isinstance(policy, dict) else None
@@ -1044,10 +1353,7 @@ class ToolLogEntry(QFrame):
         self.allow_btn.setEnabled(False)
         self.reject_btn.setEnabled(False)
         self.approval_label.setText(
-            "已允许，继续执行中…" if approved else "已拒绝，正在返回结果…"
-        )
-        self.approval_label.setText(
-            "Approved. Continuing..." if approved else "Rejected. Returning result..."
+            _t("approved_continuing") if approved else _t("rejected_returning")
         )
         self.approval_decided.emit(self.call_id, approved)
 
@@ -1059,7 +1365,6 @@ class ToolLogEntry(QFrame):
     def set_approval_pending(self, pending: bool) -> None:
         self._approval_pending = pending
         if pending:
-            self.approval_label.setText("需要你的确认后继续执行")
             self.approval_label.setText(self._approval_prompt_text())
             self.allow_btn.setEnabled(True)
             self.reject_btn.setEnabled(True)
@@ -1076,7 +1381,7 @@ class ToolLogEntry(QFrame):
             self.updateGeometry()
             return
 
-        title = QLabel("蹇€熸搷浣?")
+        title = QLabel(_t("quick_actions"))
         title.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 12px;")
         self.actions_layout.addWidget(title)
 
@@ -1085,7 +1390,7 @@ class ToolLogEntry(QFrame):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(8)
             for action in self._actions[idx : idx + 2]:
-                btn = QPushButton(str(action.get("label") or "鎵ц"))
+                btn = QPushButton(str(action.get("label") or _t("execute")))
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.setStyleSheet(
                     "background: rgba(255, 255, 255, 0.04); color: #E5E7EB; "
@@ -1114,7 +1419,7 @@ class ToolLogEntry(QFrame):
         policy: dict[str, Any] | None = None,
     ) -> None:
         if round_idx is not None:
-            self.round_label.setText(f"第 {round_idx} 轮")
+            self.round_label.setText(_tf("round_label", round=round_idx))
         self.status_chip.setText(status)
         if preview is not None:
             self._preview = preview
@@ -1127,13 +1432,13 @@ class ToolLogEntry(QFrame):
                 "border: 1px solid rgba(248, 113, 113, 0.30); "
                 "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
             )
-        elif status == "成功":
+        elif status in {_t("tool_status_success"), "成功", "Success"}:
             chip_style = (
                 "background: rgba(34, 197, 94, 0.14); color: #BBF7D0; "
                 "border: 1px solid rgba(34, 197, 94, 0.28); "
                 "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
             )
-        elif status == "失败":
+        elif status in {_t("tool_status_failed"), "失败", "Failed"}:
             chip_style = (
                 "background: rgba(248, 113, 113, 0.16); color: #FCA5A5; "
                 "border: 1px solid rgba(248, 113, 113, 0.30); "
@@ -1204,11 +1509,11 @@ class ToolTraceCard(QFrame):
         header = QHBoxLayout()
         header.setSpacing(8)
 
-        title = QLabel("Agent 执行日志")
+        title = QLabel(_t("agent_run_log"))
         title.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
         title.setStyleSheet("color: #E9D5FF;")
 
-        self.state_chip = QLabel("执行中")
+        self.state_chip = QLabel(_t("tool_status_running"))
         self.state_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.state_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.state_chip.setStyleSheet(
@@ -1217,7 +1522,7 @@ class ToolTraceCard(QFrame):
             "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
         )
 
-        self.hint = QLabel("等待工具调用")
+        self.hint = QLabel(_t("waiting_tool_call"))
         self.hint.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px;")
 
         header.addWidget(title)
@@ -1233,8 +1538,8 @@ class ToolTraceCard(QFrame):
         self.run_meta_label.setWordWrap(True)
         debug_row.addWidget(self.run_meta_label, 1)
 
-        self.run_summary_btn = QPushButton("日志摘要")
-        self.run_timeline_btn = QPushButton("时间线")
+        self.run_summary_btn = QPushButton(_t("log_summary"))
+        self.run_timeline_btn = QPushButton(_t("timeline"))
         for btn in (self.run_summary_btn, self.run_timeline_btn):
             btn.setEnabled(False)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1252,7 +1557,7 @@ class ToolTraceCard(QFrame):
         self.entries_layout.setSpacing(10)
         layout.addLayout(self.entries_layout)
 
-        self.empty_label = QLabel("Agent 正在分析任务，工具调用会显示在这里。")
+        self.empty_label = QLabel(_t("agent_analyzing_tools"))
         self.empty_label.setWordWrap(True)
         self.empty_label.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 12px;")
         layout.addWidget(self.empty_label)
@@ -1274,10 +1579,10 @@ class ToolTraceCard(QFrame):
             parts.append(f"run: {self._run_id[:10]}")
         if self._trust:
             health = str(self._trust.get("health") or "unknown")
-            validated = "yes" if self._trust.get("validated") else "no"
+            validated = _t("validated_yes") if self._trust.get("validated") else _t("validated_no")
             parts.append(f"health: {health}")
             parts.append(f"validated: {validated}")
-        self.run_meta_label.setText(" | ".join(parts) if parts else "等待运行日志")
+        self.run_meta_label.setText(" | ".join(parts) if parts else _t("waiting_run_log"))
 
     def _request_run_debug(self, mode: str) -> None:
         self.action_requested.emit(
@@ -1527,16 +1832,16 @@ class ChatWindow(QMainWindow):
         title.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C_TEXT_MAIN};")
 
-        subtitle = QLabel("Local coding workspace")
-        subtitle.setFont(QFont("Microsoft YaHei", 8))
-        subtitle.setStyleSheet(f"color: {C_TEXT_SUB};")
+        self.sidebar_subtitle_label = QLabel(_t("local_coding_workspace"))
+        self.sidebar_subtitle_label.setFont(QFont("Microsoft YaHei", 8))
+        self.sidebar_subtitle_label.setStyleSheet(f"color: {C_TEXT_SUB};")
 
         title_stack.addWidget(title)
-        title_stack.addWidget(subtitle)
+        title_stack.addWidget(self.sidebar_subtitle_label)
         h.addLayout(title_stack)
         h.addStretch(1)
 
-        for icon, tip in (("⋯", "更多"), ("⚙", "设置（开发中）")):
+        for icon, tip in (("⋯", _t("more")), ("⚙", _t("settings_dev"))):
             btn = QPushButton(icon)
             btn.setFixedSize(34, 30)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1545,7 +1850,7 @@ class ChatWindow(QMainWindow):
                 f"border: 1px solid {C_BORDER}; border-radius: 10px; font-size: 15px;"
             )
             btn.setToolTip(tip)
-            btn.clicked.connect(lambda *_: QMessageBox.information(self, "kagent", "这个按钮还在开发中。"))
+            btn.clicked.connect(lambda *_: QMessageBox.information(self, "kagent", _t("feature_in_development")))
             h.addWidget(btn)
 
         return bar
@@ -1570,6 +1875,16 @@ class ChatWindow(QMainWindow):
         )
         self.new_btn.clicked.connect(self.new_session)
         v.addWidget(self.new_btn)
+
+        self.new_folder_btn = QPushButton(_t("new_chat_for_folder"))
+        self.new_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_folder_btn.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.04); color: #CBD5E1; "
+            f"border: 1px solid {C_BORDER}; border-radius: 14px; "
+            "padding: 10px 12px; font-size: 12px; font-weight: 800;"
+        )
+        self.new_folder_btn.clicked.connect(self.new_session_from_folder)
+        v.addWidget(self.new_folder_btn)
 
         self.session_list = QListWidget()
         self.session_list.setSpacing(4)
@@ -1600,9 +1915,9 @@ QListWidget::item:selected {{
         self.session_list.itemClicked.connect(self._on_session_clicked)
         v.addWidget(self.session_list, 1)
 
-        tip = QLabel("Ctrl+N 新建 · Delete 删除")
-        tip.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px; padding: 4px 2px;")
-        v.addWidget(tip)
+        self.sidebar_tip_label = QLabel(_t("sidebar_shortcuts"))
+        self.sidebar_tip_label.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px; padding: 4px 2px;")
+        v.addWidget(self.sidebar_tip_label)
 
         return sidebar
 
@@ -1665,7 +1980,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self.scroll_bottom_btn.setFixedSize(38, 38)
         self.scroll_bottom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.scroll_bottom_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.scroll_bottom_btn.setToolTip("回到底部")
+        self.scroll_bottom_btn.setToolTip(_t("scroll_bottom"))
         self.scroll_bottom_btn.clicked.connect(self._scroll_to_bottom)
         self.scroll_bottom_btn.setStyleSheet(
             "QPushButton {"
@@ -1714,12 +2029,12 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(8)
 
-        title = QLabel("Rollback History")
-        title.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {C_TEXT_MAIN};")
-        header.addWidget(title)
+        self.rollback_history_title_label = QLabel(_t("rollback_history_title"))
+        self.rollback_history_title_label.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
+        self.rollback_history_title_label.setStyleSheet(f"color: {C_TEXT_MAIN};")
+        header.addWidget(self.rollback_history_title_label)
 
-        self.rollback_count_label = QLabel("0 entries")
+        self.rollback_count_label = QLabel(f"0 {_t('entries')}")
         self.rollback_count_label.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px;")
         header.addWidget(self.rollback_count_label)
         header.addStretch(1)
@@ -1775,12 +2090,12 @@ QListWidget::item:selected {{
         detail_layout.setContentsMargins(14, 12, 14, 14)
         detail_layout.setSpacing(8)
 
-        self.rollback_detail_title = QLabel("Select a rollback entry")
+        self.rollback_detail_title = QLabel(_t("rollback_select"))
         self.rollback_detail_title.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
         self.rollback_detail_title.setStyleSheet(f"color: {C_TEXT_MAIN};")
         detail_layout.addWidget(self.rollback_detail_title)
 
-        self.rollback_detail_meta = QLabel("The exact file diff for that version will appear here.")
+        self.rollback_detail_meta = QLabel(_t("rollback_meta_empty"))
         self.rollback_detail_meta.setWordWrap(True)
         self.rollback_detail_meta.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11px;")
         detail_layout.addWidget(self.rollback_detail_meta)
@@ -1850,11 +2165,11 @@ QListWidget::item:selected {{
         title_stack.setSpacing(2)
         title_stack.setContentsMargins(0, 0, 0, 0)
 
-        self.chat_title_label = QLabel("新会话")
+        self.chat_title_label = QLabel(_t("new_session"))
         self.chat_title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
         self.chat_title_label.setStyleSheet(f"color: {C_TEXT_MAIN};")
 
-        self.chat_subtitle_label = QLabel(f"{MODEL} · Chat · 0 条消息 · 就绪")
+        self.chat_subtitle_label = QLabel(f"{MODEL} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}")
         self.chat_subtitle_label.setFont(QFont("Microsoft YaHei", 8))
         self.chat_subtitle_label.setStyleSheet(f"color: {C_TEXT_SUB};")
 
@@ -1876,6 +2191,16 @@ QListWidget::item:selected {{
             "padding: 7px 12px; font-size: 12px; font-weight: 800;"
         )
         h.addWidget(self.settings_btn)
+
+        self.diff_review_btn = QPushButton(_t("diff_review"))
+        self.diff_review_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.diff_review_btn.clicked.connect(self._show_current_diff_review)
+        self.diff_review_btn.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
+            "padding: 7px 12px; font-size: 12px; font-weight: 800;"
+        )
+        h.addWidget(self.diff_review_btn)
 
         self.rollback_history_btn = QPushButton(_t("history"))
         self.rollback_history_btn.setCheckable(True)
@@ -1927,9 +2252,8 @@ QListWidget::item:selected {{
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
 
-        hint = QLabel("Enter 发送 · Shift+Enter 换行")
+        hint = QLabel(_t("input_shortcut_hint"))
         hint.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px;")
-        hint.setText("用自然语言描述任务，Agent 会自己决定是否读取文件、修改代码和执行命令")
         hint.setText(_t("input_hint"))
         self.input_hint_label = hint
         actions.addWidget(hint)
@@ -1938,7 +2262,7 @@ QListWidget::item:selected {{
         self.agent_btn = QPushButton("Agent")
         self.agent_btn.setCheckable(True)
         self.agent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.agent_btn.setToolTip("切换为代码 agent：可读文件、改文件、运行命令")
+        self.agent_btn.setToolTip(_t("agent_mode_tip"))
         self.agent_btn.toggled.connect(self._sync_mode_button_style)
         self.agent_btn.toggled.connect(self._refresh_chat_header)
         self.agent_btn.setChecked(True)
@@ -1956,12 +2280,25 @@ QListWidget::item:selected {{
         self.permission_menu_btn.clicked.connect(self._show_permission_menu)
         actions.addWidget(self.permission_menu_btn)
 
-        self.send_btn = QPushButton("发送")
+        self.workspace_btn = QPushButton(_workspace_button_label(self._current_workspace_root()))
+        self.workspace_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.workspace_btn.setToolTip(
+            _tf("workspace_button_tooltip", path=self._current_workspace_root())
+        )
+        self.workspace_btn.clicked.connect(self._show_workspace_menu)
+        self.workspace_btn.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
+            "padding: 8px 12px; font-size: 12px; font-weight: 800;"
+        )
+        actions.addWidget(self.workspace_btn)
+
+        self.send_btn = QPushButton(_t("send"))
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.clicked.connect(self.on_send)
         actions.addWidget(self.send_btn)
 
-        self.stop_btn = QPushButton("停止")
+        self.stop_btn = QPushButton(_t("stop"))
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.clicked.connect(self._on_stop_clicked)
         actions.addWidget(self.stop_btn)
@@ -1984,7 +2321,7 @@ QListWidget::item:selected {{
         h.addWidget(self.status_model)
         h.addStretch(1)
 
-        self.status_count = QLabel("共 0 条消息")
+        self.status_count = QLabel(f"0 {_t('messages')}")
         self.status_count.setObjectName("statusText")
         self.status_count.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11.5px;")
         h.addWidget(self.status_count)
@@ -2021,27 +2358,56 @@ QListWidget::item:selected {{
         self.setWindowTitle("kagent")
         if hasattr(self, "new_btn"):
             self.new_btn.setText(_t("new_chat"))
+        if hasattr(self, "new_folder_btn"):
+            self.new_folder_btn.setText(_t("new_chat_for_folder"))
+        if hasattr(self, "sidebar_subtitle_label"):
+            self.sidebar_subtitle_label.setText(_t("local_coding_workspace"))
+        if hasattr(self, "sidebar_tip_label"):
+            self.sidebar_tip_label.setText(_t("sidebar_shortcuts"))
         if hasattr(self, "settings_btn"):
             self.settings_btn.setText(_t("settings"))
+        if hasattr(self, "workspace_btn"):
+            self.workspace_btn.setText(_workspace_button_label(self._current_workspace_root()))
+            self.workspace_btn.setToolTip(
+                _tf("workspace_button_tooltip", path=self._current_workspace_root())
+                if self._current_workspace_root()
+                else _t("no_project_tooltip")
+            )
         if hasattr(self, "permission_menu_btn"):
             self.permission_menu_btn.setText(_t("permissions"))
         if hasattr(self, "rollback_history_btn"):
             self.rollback_history_btn.setText(_t("history"))
+        if hasattr(self, "diff_review_btn"):
+            self.diff_review_btn.setText(_t("diff_review"))
         if hasattr(self, "rollback_refresh_btn"):
             self.rollback_refresh_btn.setText(_t("refresh"))
+        if hasattr(self, "rollback_history_title_label"):
+            self.rollback_history_title_label.setText(_t("rollback_history_title"))
         if hasattr(self, "rollback_open_trace_btn"):
             self.rollback_open_trace_btn.setText(_t("open_in_chat"))
         if hasattr(self, "rollback_restore_btn"):
             self.rollback_restore_btn.setText(_t("restore"))
+        if hasattr(self, "input"):
+            self.input.setPlaceholderText(_t("input_hint"))
         if hasattr(self, "input_hint_label"):
             self.input_hint_label.setText(_t("input_hint"))
+        if hasattr(self, "agent_btn"):
+            self.agent_btn.setToolTip(_t("agent_mode_tip"))
         if hasattr(self, "send_btn"):
             self.send_btn.setText(_t("send"))
         if hasattr(self, "stop_btn"):
             self.stop_btn.setText(_t("stopping") if self._stop_requested else _t("stop"))
+        if hasattr(self, "scroll_bottom_btn"):
+            self.scroll_bottom_btn.setToolTip(_t("scroll_bottom"))
         if hasattr(self, "chat_mode_chip"):
             self.chat_mode_chip.setText(_t("workspace"))
+        if hasattr(self, "status_count"):
+            self._update_status()
+        if hasattr(self, "chat_title_label") and self.chat_title_label.text() in {"新会话", "New chat"}:
+            self.chat_title_label.setText(_t("new_session"))
         self._sync_rollback_history_button_style()
+        if hasattr(self, "chat_title_label") and hasattr(self, "chat_subtitle_label"):
+            self._refresh_chat_header()
 
     def _scope_label(self, value: str) -> str:
         return _t("all_scope") if str(value).strip().lower() == "all" else _t("workspace_scope")
@@ -2081,6 +2447,55 @@ QListWidget::item:selected {{
         self._scope_action(menu, _t("write_permission"), "KAGENT_FS_WRITE_SCOPE", app_config.FILESYSTEM_WRITE_SCOPE)
         self._scope_action(menu, _t("command_permission"), "KAGENT_FS_COMMAND_SCOPE", app_config.FILESYSTEM_COMMAND_SCOPE)
         menu.exec(self.permission_menu_btn.mapToGlobal(self.permission_menu_btn.rect().bottomLeft()))
+
+    def _show_workspace_menu(self) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; border: 1px solid {C_BORDER};"
+            "QMenu::item { padding: 7px 26px 7px 12px; }"
+            "QMenu::item:selected { background: rgba(37, 99, 235, 0.20); }"
+        )
+        select_action = QAction(_t("select_workspace"), menu)
+        select_action.triggered.connect(self._choose_workspace_for_session)
+        menu.addAction(select_action)
+
+        clear_action = QAction(_t("clear_workspace"), menu)
+        clear_action.triggered.connect(self._clear_workspace_for_session)
+        menu.addAction(clear_action)
+
+        menu.exec(self.workspace_btn.mapToGlobal(self.workspace_btn.rect().bottomLeft()))
+
+    def _choose_workspace_for_session(self) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+        current = self._current_workspace_root() or str(Path(app_config.WORKSPACE_ROOT).expanduser().resolve())
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            _t("select_workspace"),
+            current,
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return
+        self._set_current_workspace_root(selected)
+
+    def _clear_workspace_for_session(self) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+        if not self.current_session:
+            self.new_session()
+        if not self.current_session:
+            return
+        db.set_session_workspace_root(self.current_session, "")
+        self._load_sessions()
+        self._refresh_chat_header()
+        self._refresh_rollback_history_panel()
 
     def _set_permission_scope(self, key: str, value: str) -> None:
         self._apply_settings_values({key: value})
@@ -2144,7 +2559,39 @@ QListWidget::item:selected {{
     def _workspace_tools_for_session(self) -> WorkspaceTools | None:
         if not self.current_session:
             return None
-        return WorkspaceTools(session_id=self.current_session)
+        if not self._current_workspace_root():
+            return None
+        return WorkspaceTools(
+            root=self._current_workspace_root(),
+            session_id=self.current_session,
+        )
+
+    def _current_workspace_root(self) -> str:
+        if self.current_session:
+            session = db.get_session(self.current_session)
+            if session is not None:
+                return str(session.get("workspace_root") or "")
+        return str(Path(app_config.WORKSPACE_ROOT).expanduser().resolve())
+
+    def _workspace_header_label(self) -> str:
+        root = self._current_workspace_root()
+        if not root:
+            return _t("no_project_label")
+        return _tf("workspace_label", path=root)
+
+    def _set_current_workspace_root(self, workspace_root: str) -> None:
+        if not self.current_session:
+            self.new_session()
+        if not self.current_session:
+            return
+        root = Path(workspace_root).expanduser()
+        if not root.exists() or not root.is_dir():
+            QMessageBox.warning(self, "kagent", _tf("workspace_missing", path=str(root)))
+            return
+        db.set_session_workspace_root(self.current_session, str(root.resolve()))
+        self._load_sessions()
+        self._refresh_chat_header()
+        self._refresh_rollback_history_panel()
 
     def _set_rollback_detail_empty(self, text: str | None = None) -> None:
         if not hasattr(self, "rollback_detail_title"):
@@ -2177,7 +2624,7 @@ QListWidget::item:selected {{
         source_tool = str(item.get("source_tool") or "").strip() or "tool"
         summary = str(item.get("summary") or "").strip()
         paths = item.get("paths") if isinstance(item.get("paths"), list) else []
-        path_label = ", ".join(str(path) for path in paths[:2]) if paths else "No files"
+        path_label = ", ".join(str(path) for path in paths[:2]) if paths else _t("no_file_details")
         if len(paths) > 2:
             path_label += f" (+{len(paths) - 2})"
         return (
@@ -2185,6 +2632,14 @@ QListWidget::item:selected {{
             f"{summary}\n"
             f"{path_label}"
         )
+
+    def _format_session_list_item(self, session: dict[str, Any]) -> str:
+        title = str(session.get("title") or _t("new_session"))
+        workspace_root = str(session.get("workspace_root") or "").strip()
+        if not workspace_root:
+            return f"{title}\n{_t('no_project')}"
+        workspace_name = Path(workspace_root).name or workspace_root
+        return f"{title}\n{workspace_name}"
 
     def _refresh_rollback_history_panel(self, select_id: int | None = None) -> None:
         if not hasattr(self, "rollback_list"):
@@ -2196,7 +2651,9 @@ QListWidget::item:selected {{
             self.rollback_count_label.setText(f"0 {_t('entries')}")
             self._rollback_history_items = []
             self._selected_rollback_id = None
-            self._set_rollback_detail_empty(_t("no_active_session"))
+            self._set_rollback_detail_empty(
+                _t("no_active_session") if not self.current_session else _t("no_project_for_workspace_action")
+            )
             return
 
         data = workspace.list_rollback_history(limit=40, include_inactive=True)
@@ -2257,7 +2714,12 @@ QListWidget::item:selected {{
 
         self.rollback_detail_title.setText(f"#{rollback_id} | {source_tool}")
         self.rollback_detail_meta.setText(
-            f"Status: {status} | Files: {int(preview.get('path_count') or 0)} | Created: {preview.get('created_at') or '-'}"
+            _tf(
+                "rollback_status_meta",
+                status=status,
+                files=int(preview.get("path_count") or 0),
+                created=preview.get("created_at") or "-",
+            )
         )
 
         diff_entries = preview.get("diff_entries") if isinstance(preview.get("diff_entries"), list) else []
@@ -2265,19 +2727,19 @@ QListWidget::item:selected {{
         for entry in diff_entries:
             if not isinstance(entry, dict):
                 continue
-            path = str(entry.get("path") or "").strip() or "(unknown path)"
+            path = str(entry.get("path") or "").strip() or f"({_t('unknown_path')})"
             action = _rollback_change_type_label(str(entry.get("action") or ""))
             file_lines.append(f"- {path} | {action}")
         self.rollback_detail_files.setText(
-            "\n".join(file_lines) if file_lines else "No file details available"
+            "\n".join(file_lines) if file_lines else _t("no_file_details")
         )
 
         md = [
-            f"### Rollback #{rollback_id}",
+            f"### {_tf('rollback_title', rollback_id=rollback_id)}",
             "",
-            f"**Status**: {status}",
+            f"**{_t('status')}**: {status}",
             "",
-            f"**Summary**: {preview.get('summary') or '-'}",
+            f"**{_t('summary')}**: {preview.get('summary') or '-'}",
             "",
             _preview_markdown_block(str(preview.get("preview") or "")),
         ]
@@ -2292,8 +2754,7 @@ QListWidget::item:selected {{
         if rollback_id is None:
             return
         prompt = (
-            f"Call the preview_rollback_change tool with rollback_id={int(rollback_id)}. "
-            "Show the diff preview only and do not perform any rollback."
+            _tf("rollback_preview_prompt", rollback_id=int(rollback_id))
         )
         self._submit_text(prompt, clear_input=False)
 
@@ -2302,8 +2763,7 @@ QListWidget::item:selected {{
         if rollback_id is None:
             return
         prompt = (
-            f"Call the rollback_change tool with rollback_id={int(rollback_id)}. "
-            "Restore that version and then tell me the result."
+            _tf("rollback_restore_prompt", rollback_id=int(rollback_id))
         )
         self._submit_text(prompt, clear_input=False)
 
@@ -2334,7 +2794,7 @@ QListWidget::item:selected {{
         title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 28px; font-weight: 800;")
         v.addWidget(title)
 
-        subtitle = QLabel("像正式产品一样的聊天界面，支持流式回复、Markdown 渲染和 Agent 工具。")
+        subtitle = QLabel(_t("empty_subtitle"))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 14px; line-height: 1.5;")
@@ -2344,15 +2804,15 @@ QListWidget::item:selected {{
         chips.setSpacing(8)
         chips.addStretch(1)
         for text, fg, bg, border in (
-            ("流式回复", "#E9D5FF", "rgba(124, 58, 237, 0.14)", "rgba(124, 58, 237, 0.28)"),
-            ("多轮对话", "#DBEAFE", "rgba(37, 99, 235, 0.14)", "rgba(37, 99, 235, 0.28)"),
-            ("Agent 工具", "#BBF7D0", "rgba(34, 197, 94, 0.12)", "rgba(34, 197, 94, 0.26)"),
+            (_t("feature_streaming"), "#E9D5FF", "rgba(124, 58, 237, 0.14)", "rgba(124, 58, 237, 0.28)"),
+            (_t("feature_multi_turn"), "#DBEAFE", "rgba(37, 99, 235, 0.14)", "rgba(37, 99, 235, 0.28)"),
+            (_t("feature_agent_tools"), "#BBF7D0", "rgba(34, 197, 94, 0.12)", "rgba(34, 197, 94, 0.26)"),
         ):
             chips.addWidget(_chip_label(text, fg, bg, border))
         chips.addStretch(1)
         v.addLayout(chips)
 
-        hint = QLabel("Enter 发送 · Shift+Enter 换行")
+        hint = QLabel(_t("input_shortcut_hint"))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 12px;")
         v.addWidget(hint)
@@ -2398,11 +2858,11 @@ QListWidget::item:selected {{
         self.session_list.clear()
         sessions = db.list_sessions()
         for s in sessions:
-            title = s["title"] or "新会话"
-            item = QListWidgetItem(title)
+            title = s["title"] or _t("new_session")
+            item = QListWidgetItem(self._format_session_list_item(s))
             item.setData(Qt.ItemDataRole.UserRole, s["id"])
-            item.setToolTip(title)
-            item.setSizeHint(QSize(0, 46))
+            item.setToolTip(str(s.get("workspace_root") or title))
+            item.setSizeHint(QSize(0, 58))
             self.session_list.addItem(item)
             if s["id"] == self.current_session:
                 self.session_list.setCurrentItem(item)
@@ -2410,18 +2870,18 @@ QListWidget::item:selected {{
         self._update_status()
 
     def _current_session_title(self) -> str:
-        item = self.session_list.currentItem()
-        if item is not None:
-            return item.text() or "新会话"
         if self.current_session:
             for s in db.list_sessions():
                 if s["id"] == self.current_session:
-                    return s["title"] or "新会话"
-        return "新会话"
+                    return s["title"] or _t("new_session")
+        item = self.session_list.currentItem()
+        if item is not None:
+            return (item.text().splitlines() or [_t("new_session")])[0] or _t("new_session")
+        return _t("new_session")
 
     def _open_session(self, session_id: str):
         if self._is_busy():
-            QMessageBox.information(self, "kagent", "当前任务正在执行中，请先等待完成。")
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
             return
 
         self.current_session = session_id
@@ -2438,16 +2898,40 @@ QListWidget::item:selected {{
 
     def new_session(self):
         if self._is_busy():
-            QMessageBox.information(self, "kagent", "当前任务正在执行中，请先等待完成。")
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
             return
 
         sid = uuid.uuid4().hex[:12]
-        db.create_session(sid)
+        db.create_session(sid, workspace_root=self._current_workspace_root())
+        self._open_session(sid)
+
+    def new_session_from_folder(self):
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            _t("select_workspace_for_new_chat"),
+            self._current_workspace_root() or str(Path(app_config.WORKSPACE_ROOT).expanduser().resolve()),
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return
+
+        root = Path(selected).expanduser()
+        if not root.exists() or not root.is_dir():
+            QMessageBox.warning(self, "kagent", _tf("workspace_missing", path=str(root)))
+            return
+
+        sid = uuid.uuid4().hex[:12]
+        title = _session_title_for_workspace(root)
+        db.create_session(sid, title=title, workspace_root=str(root.resolve()))
         self._open_session(sid)
 
     def _delete_current_session(self):
         if self._is_busy():
-            QMessageBox.information(self, "kagent", "当前任务正在执行中，暂时不能删除会话。")
+            QMessageBox.information(self, "kagent", _t("busy_delete_session"))
             return
         if not self.current_session:
             return
@@ -2455,8 +2939,8 @@ QListWidget::item:selected {{
         title = self._current_session_title()
         answer = QMessageBox.question(
             self,
-            "删除会话",
-            f"确定删除「{title}」吗？",
+            _t("delete_session_title"),
+            _tf("delete_session_confirm", title=title),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -2543,7 +3027,7 @@ QListWidget::item:selected {{
         trace = ToolTraceCard(width)
         trace.approval_decided.connect(self._resolve_inline_approval)
         trace.action_requested.connect(self._handle_trace_action)
-        trace.set_state("执行中", kind="active")
+        trace.set_state(_t("tool_status_running"), kind="active")
 
         insert_at = -1
         if self._streaming_row is not None:
@@ -2572,18 +3056,18 @@ QListWidget::item:selected {{
                 run_id=str(event.get("run_id") or ""),
                 run_log_path=str(event.get("run_log_path") or ""),
             )
-            trace.set_state("Analyzing", kind="active")
+            trace.set_state(_t("analyzing"), kind="active")
             return
         if event_type == "final_trust_check":
             trust = event.get("trust") if isinstance(event.get("trust"), dict) else {}
             trace.set_trust_summary(trust)
             health = str(trust.get("health") or "").strip()
             if health == "fail":
-                trace.set_state("需要注意", kind="error")
+                trace.set_state(_t("trust_attention"), kind="error")
             elif health == "warn":
-                trace.set_state("有风险", kind="active")
+                trace.set_state(_t("trust_risky"), kind="active")
             elif health == "pass":
-                trace.set_state("可信", kind="done")
+                trace.set_state(_t("trustworthy"), kind="done")
             return
         if event_type == "agent_status":
             status_text = str(event.get("status") or "").strip()
@@ -2608,7 +3092,7 @@ QListWidget::item:selected {{
             trace.upsert_event(
                 call_id=call_id,
                 name=name,
-                status="预览",
+                status=_t("tool_status_preview"),
                 args=args,
                 preview=preview,
                 round_idx=round_idx,
@@ -2620,7 +3104,7 @@ QListWidget::item:selected {{
             trace.upsert_event(
                 call_id=call_id,
                 name=name,
-                status="执行中",
+                status=_t("tool_status_running"),
                 args=args,
                 round_idx=round_idx,
                 approval_pending=False,
@@ -2632,14 +3116,14 @@ QListWidget::item:selected {{
             trace.upsert_event(
                 call_id=call_id,
                 name=name,
-                status="预览",
+                status=_t("tool_status_preview"),
                 args=args,
                 preview=preview,
                 round_idx=round_idx,
                 approval_pending=True,
                 policy=policy,
             )
-            trace.set_state("等待确认", kind="active")
+            trace.set_state(_t("waiting_confirmation"), kind="active")
         elif event_type == "tool_approval_decision":
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
             preview = str(event.get("preview") or "")
@@ -2647,7 +3131,7 @@ QListWidget::item:selected {{
             trace.upsert_event(
                 call_id=call_id,
                 name=name,
-                status="执行中" if approved else "失败",
+                status=_t("tool_status_running") if approved else _t("tool_status_failed"),
                 args=args,
                 preview=preview,
                 round_idx=round_idx,
@@ -2655,7 +3139,10 @@ QListWidget::item:selected {{
                 approval_pending=False,
                 policy=policy,
             )
-            trace.set_state("执行中" if approved else "失败", kind="active" if approved else "error")
+            trace.set_state(
+                _t("tool_status_running") if approved else _t("tool_status_failed"),
+                kind="active" if approved else "error",
+            )
         elif event_type == "tool_result":
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
             result = event.get("result") if isinstance(event.get("result"), dict) else {}
@@ -2663,7 +3150,7 @@ QListWidget::item:selected {{
             trace.upsert_event(
                 call_id=call_id,
                 name=name,
-                status="失败" if error else "成功",
+                status=_t("tool_status_failed") if error else _t("tool_status_success"),
                 args=args,
                 result=result,
                 round_idx=round_idx,
@@ -2672,7 +3159,7 @@ QListWidget::item:selected {{
                 policy=policy,
             )
             if error:
-                trace.set_state("失败", kind="error")
+                trace.set_state(_t("tool_status_failed"), kind="error")
 
     def _render_messages(
         self,
@@ -2808,7 +3295,7 @@ QListWidget::item:selected {{
         if not prompt:
             return
         if self._is_busy():
-            QMessageBox.information(self, "kagent", "当前任务还在执行，先等它完成再点这个操作。")
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
             return
         self._submit_text(prompt, clear_input=False)
 
@@ -2816,23 +3303,83 @@ QListWidget::item:selected {{
         run_log_path = str(payload.get("run_log_path") or "").strip()
         mode = str(payload.get("mode") or "summary").strip()
         if not run_log_path:
-            QMessageBox.information(self, "kagent", "当前运行还没有可用日志路径。")
+            QMessageBox.information(self, "kagent", _t("no_run_log_path"))
             return
         try:
             markdown = _run_debug_markdown(run_log_path, mode)
         except Exception as exc:
-            QMessageBox.warning(self, "kagent", f"读取运行日志失败：{exc}")
+            QMessageBox.warning(self, "kagent", _tf("read_run_log_failed", error=exc))
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Agent 运行调试")
+        dialog.setWindowTitle(_t("run_debug_title"))
         dialog.resize(760, 620)
         dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        title = QLabel(f"Run log: {Path(run_log_path).name}")
+        title = QLabel(_tf("run_log_label", name=Path(run_log_path).name))
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
+        layout.addWidget(title)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setStyleSheet(
+            f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+            f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 10px;"
+        )
+        view.setHtml(render(markdown))
+        layout.addWidget(view, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        resume_button = buttons.addButton(
+            _t("resume_task"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        resume_button.clicked.connect(
+            lambda _checked=False, path=run_log_path, dlg=dialog: self._resume_run_from_debug(
+                path, dlg
+            )
+        )
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _resume_run_from_debug(self, run_log_path: str, dialog: QDialog | None = None) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+        try:
+            context = build_resume_context(run_log_path)
+            prompt = _resume_task_prompt(context)
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", _tf("build_resume_context_failed", error=exc))
+            return
+        if dialog is not None:
+            dialog.accept()
+        self._submit_text(prompt, clear_input=False)
+
+    def _show_current_diff_review(self) -> None:
+        workspace = self._workspace_tools_for_session()
+        if workspace is None:
+            QMessageBox.information(self, "kagent", _t("no_active_session"))
+            return
+        try:
+            preview = workspace.preview_rollback_session(limit=80)
+            markdown = _diff_review_markdown(preview)
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", _tf("diff_review_failed", error=exc))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(_t("current_diff_review"))
+        dialog.resize(840, 660)
+        dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(_t("current_diff_review"))
         title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
         layout.addWidget(title)
 
@@ -2927,7 +3474,7 @@ QListWidget::item:selected {{
 
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(f"{MODEL} ? Workspace ? {count} ??? ? {self._activity}")
-        self.chat_mode_chip.setText("Workspace")
+        self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
             "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
             "border: 1px solid rgba(124, 58, 237, 0.34); border-radius: 999px; "
@@ -2936,8 +3483,7 @@ QListWidget::item:selected {{
 
     def _legacy_update_status(self):
         count = len(db.get_messages(self.current_session)) if self.current_session else 0
-        self.status_count.setText(f"共 {count} 条消息")
-        self.status_count.setText(f"共 {count} 条消息")
+        self.status_count.setText(f"{count} {_t('messages')}")
 
     # ==================== Send Flow ====================
 
@@ -2968,9 +3514,9 @@ QListWidget::item:selected {{
 
         trace = self._agent_trace_card if isinstance(worker, AgentWorker) else None
         if trace is not None:
-            trace.set_state("已停止", kind="active")
+            trace.set_state(_t("stopped"), kind="active")
 
-        self._activity = "已停止"
+        self._activity = "Stopped"
         self._send_locked = False
         self.worker = None
         self._stop_requested = False
@@ -3092,7 +3638,12 @@ QListWidget::item:selected {{
         history = db.get_messages(self.current_session)
         self._render_messages(history, thinking=True)
 
-        worker = AgentWorker(self.current_session, normalized, history)
+        worker = AgentWorker(
+            self.current_session,
+            normalized,
+            history,
+            workspace_root=self._current_workspace_root(),
+        )
         self.worker = worker
         self._attach_worker_signals(worker)
 
@@ -3140,7 +3691,10 @@ QListWidget::item:selected {{
 
         trace = self._agent_trace_card
         if trace is not None:
-            trace.set_state("Stopped" if was_stopped else "Done", kind="active" if was_stopped else "done")
+            trace.set_state(
+                _t("stopped") if was_stopped else _t("done"),
+                kind="active" if was_stopped else "done",
+            )
 
         self._send_locked = False
         self.worker = None
@@ -3169,7 +3723,7 @@ QListWidget::item:selected {{
 
         trace = self._agent_trace_card
         if trace is not None:
-            trace.set_state("Failed", kind="error")
+            trace.set_state(_t("failed"), kind="error")
 
         self._send_locked = False
         self.worker = None
@@ -3180,7 +3734,7 @@ QListWidget::item:selected {{
         self._streaming_time = ""
         self._refresh_rollback_history_panel()
         self.input.setFocus()
-        QMessageBox.warning(self, "kagent", f"调用失败：\n\n{msg}")
+        QMessageBox.warning(self, "kagent", _tf("call_failed", error=msg))
 
     def _refresh_chat_header(self):
         title = self._current_session_title()
@@ -3188,8 +3742,16 @@ QListWidget::item:selected {{
 
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(
-            f"{MODEL} | {_t('workspace')} | {count} {_t('messages')} | {self._activity_label()}"
+            f"{MODEL} | {self._workspace_header_label()} | "
+            f"{count} {_t('messages')} | {self._activity_label()}"
         )
+        if hasattr(self, "workspace_btn"):
+            self.workspace_btn.setText(_workspace_button_label(self._current_workspace_root()))
+            self.workspace_btn.setToolTip(
+                _tf("workspace_button_tooltip", path=self._current_workspace_root())
+                if self._current_workspace_root()
+                else _t("no_project_tooltip")
+            )
         self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
             "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
@@ -3228,7 +3790,7 @@ QListWidget::item:selected {{
 
         trace = self._agent_trace_card
         if trace is not None:
-            trace.set_state("Stopped", kind="active")
+            trace.set_state(_t("stopped"), kind="active")
 
         self._activity = "Stopped"
         self._send_locked = False
@@ -3257,7 +3819,7 @@ QListWidget::item:selected {{
 
         trace = self._agent_trace_card
         if trace is not None:
-            trace.set_state("Failed", kind="error")
+            trace.set_state(_t("failed"), kind="error")
 
         self._send_locked = False
         self.worker = None
@@ -3268,7 +3830,7 @@ QListWidget::item:selected {{
         self._streaming_time = ""
         self._refresh_rollback_history_panel()
         self.input.setFocus()
-        QMessageBox.warning(self, "kagent", f"调用失败：\n\n{msg}")
+        QMessageBox.warning(self, "kagent", _tf("call_failed", error=msg))
 
     def _on_title(self, title: str):
         self._load_sessions()

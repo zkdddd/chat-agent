@@ -2,9 +2,10 @@ import json
 import sqlite3
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
-from .config import DB_PATH
+from .config import DB_PATH, WORKSPACE_ROOT
 
 _lock = threading.Lock()
 
@@ -26,9 +27,20 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                workspace_root TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        columns = {
+            str(row["name"])
+            for row in c.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "workspace_root" not in columns:
+            c.execute("ALTER TABLE sessions ADD COLUMN workspace_root TEXT")
+        c.execute(
+            "UPDATE sessions SET workspace_root = ? WHERE workspace_root IS NULL OR workspace_root = ''",
+            (_normalize_workspace_root(WORKSPACE_ROOT),),
+        )
         c.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,11 +95,20 @@ def init_db() -> None:
         )
 
 
-def create_session(session_id: str, title: str = "新对话") -> None:
+def create_session(
+    session_id: str,
+    title: str = "新对话",
+    workspace_root: str | None = None,
+) -> None:
+    stored_workspace = (
+        _normalize_workspace_root(WORKSPACE_ROOT)
+        if workspace_root is None
+        else _normalize_workspace_root(workspace_root)
+    )
     with _lock, _conn() as c:
         c.execute(
-            "INSERT INTO sessions (id, title) VALUES (?, ?)",
-            (session_id, title),
+            "INSERT INTO sessions (id, title, workspace_root) VALUES (?, ?, ?)",
+            (session_id, title, stored_workspace),
         )
 
 
@@ -102,9 +123,41 @@ def rename_session(session_id: str, title: str) -> None:
 def list_sessions() -> list[dict]:
     with _lock, _conn() as c:
         rows = c.execute(
-            "SELECT id, title, created_at FROM sessions ORDER BY created_at DESC"
+            "SELECT id, title, workspace_root, created_at FROM sessions ORDER BY created_at DESC"
         ).fetchall()
-        return [{"id": r["id"], "title": r["title"], "created_at": r["created_at"]} for r in rows]
+        return [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "workspace_root": r["workspace_root"] if r["workspace_root"] is not None else "",
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+
+def get_session(session_id: str) -> dict | None:
+    with _lock, _conn() as c:
+        row = c.execute(
+            "SELECT id, title, workspace_root, created_at FROM sessions WHERE id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "workspace_root": row["workspace_root"] if row["workspace_root"] is not None else "",
+            "created_at": row["created_at"],
+        }
+
+
+def set_session_workspace_root(session_id: str, workspace_root: str) -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            "UPDATE sessions SET workspace_root = ? WHERE id = ?",
+            (_normalize_workspace_root(workspace_root), session_id),
+        )
 
 
 def delete_session(session_id: str) -> None:
@@ -352,3 +405,9 @@ def mark_rollback_entries_superseded_after(session_id: str, entry_id: int) -> in
             (session_id, int(entry_id)),
         )
         return int(cur.rowcount or 0)
+
+
+def _normalize_workspace_root(path: str) -> str:
+    if str(path).strip() == "":
+        return ""
+    return str(Path(path).expanduser().resolve())
