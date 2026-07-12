@@ -11,6 +11,9 @@
 - The current project button now sits next to the permission button and shows the selected folder name.
 - The current project menu next to permissions can now switch to `No folder`, while the sidebar keeps only normal new chat and folder-based new chat.
 - The main UI has been simplified with a calmer dark theme, fewer persistent badges, shorter input hints, and a cleaner empty state.
+- The sidebar session list now shows clearer project/no-folder context, current-chat state, and creation time.
+- The input action row now separates lightweight permission/project state pills from the primary send action.
+- No-folder chats now surface `Normal chat` / no-file-access state in the chat header and mode chip.
 
 Agent 功能演进记录见：[docs/agent-development.md](docs/agent-development.md)
 

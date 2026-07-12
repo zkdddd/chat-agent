@@ -117,6 +117,11 @@ UI_TEXT = {
         "no_project_label": "项目：未选择",
         "no_project_tooltip": "当前会话未绑定项目，将作为普通聊天使用。",
         "no_project_for_workspace_action": "当前会话没有绑定项目，请先选择项目。",
+        "no_project_chat_mode": "普通聊天",
+        "no_project_chat_detail": "不访问文件",
+        "project_chat_mode": "项目会话",
+        "session_current_marker": "当前",
+        "session_created_at": "创建于 {time}",
         "input_hint": "用自然语言描述任务，Agent 会自己决定是否读取文件、修改代码和执行命令",
         "send": "发送",
         "stop": "停止",
@@ -291,6 +296,11 @@ UI_TEXT = {
         "no_project_label": "Project: none",
         "no_project_tooltip": "This chat is not bound to a project and will use normal chat.",
         "no_project_for_workspace_action": "This chat has no project. Select a project first.",
+        "no_project_chat_mode": "Normal chat",
+        "no_project_chat_detail": "No file access",
+        "project_chat_mode": "Project chat",
+        "session_current_marker": "Current",
+        "session_created_at": "Created {time}",
         "input_hint": "Describe a task. Agent can read files, edit code, and run commands when needed.",
         "send": "Send",
         "stop": "Stop",
@@ -558,6 +568,16 @@ def _format_message_time(created_at: str | None) -> str:
         return raw
 
 
+def _format_short_datetime(value: str | None) -> str:
+    if not value:
+        return _t("just_now")
+    raw = str(value).strip().replace("T", " ")
+    try:
+        return datetime.fromisoformat(raw).strftime("%m-%d %H:%M")
+    except Exception:
+        return raw[:16] if len(raw) > 16 else raw
+
+
 def _chip_label(text: str, fg: str, bg: str, border: str) -> QLabel:
     label = QLabel(text)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -736,6 +756,16 @@ def _resume_task_prompt(context: dict[str, Any]) -> str:
 def _session_title_for_workspace(path: str | Path) -> str:
     root = Path(path)
     return root.name or _t("new_session")
+
+
+def _session_workspace_summary(session: dict[str, Any], *, current: bool = False) -> str:
+    workspace_root = str(session.get("workspace_root") or "").strip()
+    created = _tf("session_created_at", time=_format_short_datetime(str(session.get("created_at") or "")))
+    marker = f" · {_t('session_current_marker')}" if current else ""
+    if not workspace_root:
+        return f"{_t('no_project_chat_mode')} · {_t('no_project_chat_detail')}{marker}"
+    workspace_name = Path(workspace_root).name or workspace_root
+    return f"{workspace_name} · {created}{marker}"
 
 
 def _workspace_button_label(path: str | Path) -> str:
@@ -1895,7 +1925,7 @@ QListWidget::item:hover {{
     background: rgba(255, 255, 255, 0.035);
 }}
 QListWidget::item:selected {{
-    background: rgba(56, 189, 248, 0.13);
+    background: rgba(56, 189, 248, 0.16);
     color: #E0F2FE;
 }}
 """.strip()
@@ -2261,9 +2291,9 @@ QListWidget::item:selected {{
         self.permission_menu_btn = QPushButton(_t("permissions"))
         self.permission_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.permission_menu_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
-            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
+            "background: rgba(255, 255, 255, 0.018); color: #8EA0B5; "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 999px; "
+            "padding: 6px 10px; font-size: 11px; font-weight: 700;"
         )
         self.permission_menu_btn.clicked.connect(self._show_permission_menu)
         actions.addWidget(self.permission_menu_btn)
@@ -2275,9 +2305,9 @@ QListWidget::item:selected {{
         )
         self.workspace_btn.clicked.connect(self._show_workspace_menu)
         self.workspace_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
-            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
+            "background: rgba(255, 255, 255, 0.018); color: #8EA0B5; "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 999px; "
+            "padding: 6px 10px; font-size: 11px; font-weight: 700;"
         )
         actions.addWidget(self.workspace_btn)
 
@@ -2389,7 +2419,7 @@ QListWidget::item:selected {{
         if hasattr(self, "scroll_bottom_btn"):
             self.scroll_bottom_btn.setToolTip(_t("scroll_bottom"))
         if hasattr(self, "chat_mode_chip"):
-            self.chat_mode_chip.setText(_t("workspace"))
+            self._sync_workspace_mode_chip()
         if hasattr(self, "status_count"):
             self._update_status()
         if hasattr(self, "chat_title_label") and self.chat_title_label.text() in {"新会话", "New chat"}:
@@ -2397,6 +2427,24 @@ QListWidget::item:selected {{
         self._sync_rollback_history_button_style()
         if hasattr(self, "chat_title_label") and hasattr(self, "chat_subtitle_label"):
             self._refresh_chat_header()
+
+    def _sync_workspace_mode_chip(self) -> None:
+        if not hasattr(self, "chat_mode_chip"):
+            return
+        if self._current_workspace_root():
+            self.chat_mode_chip.setText(_t("project_chat_mode"))
+            self.chat_mode_chip.setStyleSheet(
+                "background: rgba(20, 184, 166, 0.12); color: #CCFBF1; "
+                "border: 1px solid rgba(20, 184, 166, 0.30); border-radius: 999px; "
+                "padding: 4px 10px; font-size: 11px; font-weight: 700;"
+            )
+        else:
+            self.chat_mode_chip.setText(_t("no_project_chat_mode"))
+            self.chat_mode_chip.setStyleSheet(
+                "background: rgba(148, 163, 184, 0.10); color: #CBD5E1; "
+                "border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 999px; "
+                "padding: 4px 10px; font-size: 11px; font-weight: 700;"
+            )
 
     def _scope_label(self, value: str) -> str:
         return _t("all_scope") if str(value).strip().lower() == "all" else _t("workspace_scope")
@@ -2565,7 +2613,7 @@ QListWidget::item:selected {{
     def _workspace_header_label(self) -> str:
         root = self._current_workspace_root()
         if not root:
-            return _t("no_project_label")
+            return f"{_t('no_project_chat_mode')} | {_t('no_project_chat_detail')}"
         return _tf("workspace_label", path=root)
 
     def _set_current_workspace_root(self, workspace_root: str) -> None:
@@ -2624,11 +2672,8 @@ QListWidget::item:selected {{
 
     def _format_session_list_item(self, session: dict[str, Any]) -> str:
         title = str(session.get("title") or _t("new_session"))
-        workspace_root = str(session.get("workspace_root") or "").strip()
-        if not workspace_root:
-            return f"{title}\n{_t('no_project')}"
-        workspace_name = Path(workspace_root).name or workspace_root
-        return f"{title}\n{workspace_name}"
+        summary = _session_workspace_summary(session, current=session.get("id") == self.current_session)
+        return f"{title}\n{summary}"
 
     def _refresh_rollback_history_panel(self, select_id: int | None = None) -> None:
         if not hasattr(self, "rollback_list"):
@@ -2832,8 +2877,8 @@ QListWidget::item:selected {{
             title = s["title"] or _t("new_session")
             item = QListWidgetItem(self._format_session_list_item(s))
             item.setData(Qt.ItemDataRole.UserRole, s["id"])
-            item.setToolTip(str(s.get("workspace_root") or title))
-            item.setSizeHint(QSize(0, 58))
+            item.setToolTip(str(s.get("workspace_root") or _t("no_project_chat_detail")))
+            item.setSizeHint(QSize(0, 62))
             self.session_list.addItem(item)
             if s["id"] == self.current_session:
                 self.session_list.setCurrentItem(item)
@@ -3446,11 +3491,7 @@ QListWidget::item:selected {{
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(f"{MODEL} ? Workspace ? {count} ??? ? {self._activity}")
         self.chat_mode_chip.setText(_t("workspace"))
-        self.chat_mode_chip.setStyleSheet(
-            "background: rgba(20, 184, 166, 0.12); color: #CCFBF1; "
-            "border: 1px solid rgba(20, 184, 166, 0.30); border-radius: 999px; "
-            "padding: 4px 10px; font-size: 11px; font-weight: 700;"
-        )
+        self._sync_workspace_mode_chip()
 
     def _legacy_update_status(self):
         count = len(db.get_messages(self.current_session)) if self.current_session else 0
@@ -3723,12 +3764,7 @@ QListWidget::item:selected {{
                 if self._current_workspace_root()
                 else _t("no_project_tooltip")
             )
-        self.chat_mode_chip.setText(_t("workspace"))
-        self.chat_mode_chip.setStyleSheet(
-            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-            "border: 1px solid rgba(124, 58, 237, 0.34); border-radius: 999px; "
-            "padding: 4px 10px; font-size: 11px; font-weight: 700;"
-        )
+        self._sync_workspace_mode_chip()
 
     def _update_status(self):
         count = len(db.get_messages(self.current_session)) if self.current_session else 0

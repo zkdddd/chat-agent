@@ -3,6 +3,7 @@ from kagent.ui.main_window import (
     _diff_review_markdown,
     _resume_task_prompt,
     _run_debug_markdown,
+    _session_workspace_summary,
     _session_title_for_workspace,
     _tool_entry_actions,
     _tool_event_markdown,
@@ -132,6 +133,26 @@ def test_session_title_for_workspace_uses_folder_name(tmp_path):
     project.mkdir()
 
     assert _session_title_for_workspace(project) == "target-project"
+
+
+def test_session_workspace_summary_distinguishes_project_and_no_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+    project = tmp_path / "target-project"
+    project.mkdir()
+
+    project_summary = _session_workspace_summary(
+        {
+            "workspace_root": str(project),
+            "created_at": "2026-07-13 09:30:00",
+        },
+        current=True,
+    )
+    no_folder_summary = _session_workspace_summary({"workspace_root": "", "created_at": ""})
+
+    assert "target-project" in project_summary
+    assert "Created 07-13 09:30" in project_summary
+    assert "Current" in project_summary
+    assert no_folder_summary == "Normal chat · No file access"
 
 
 def test_workspace_button_label_shows_current_project_folder(tmp_path, monkeypatch):

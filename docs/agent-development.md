@@ -1,5 +1,32 @@
 # Agent Development Log
 
+## 2026-07-13: UI Session And No-Folder Clarity
+
+### What changed
+
+- Sidebar session rows now show the chat title plus project/no-folder context, creation time, and current-chat marker.
+- The input action row now treats permissions and current project as lightweight status pills, keeping Send as the primary action.
+- No-folder chats now show `Normal chat` and `No file access` in the header/mode chip so users know the coding workspace tools are not active.
+- README was updated to reflect the UI interaction changes.
+
+### Why
+
+- The previous UI had the right functions, but the visual hierarchy still made project state and action priority easy to miss.
+- Coding-agent products need very clear workspace state because no-folder chat and project-bound agent sessions have different capabilities.
+
+### Impacted modules
+
+- `kagent/ui/main_window.py`
+- `tests/test_ui_run_debug.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### Verification
+
+```text
+.\run-tests.bat
+```
+
 这个文档用来记录 KAgent 的代码 Agent 能力是怎样一步步发展出来的。
 
 记录原则：
