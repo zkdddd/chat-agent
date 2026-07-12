@@ -48,23 +48,23 @@ THINKING_PLACEHOLDER_DELAY_MS = 220
 WORKER_STOP_GRACE_MS = 1500
 
 
-C_BG_ROOT = "#070B14"
-C_BG_PANEL = "#0C1322"
-C_BG_PANEL_ALT = "#0E1626"
-C_BG_SIDEBAR = "#09101B"
-C_BG_SURFACE = "#111827"
-C_BG_SURFACE_ALT = "#162033"
-C_BG_INPUT = "#0F172A"
-C_BG_INPUT_WRAP = "#101B2D"
-C_TEXT_MAIN = "#E5E7EB"
-C_TEXT_SUB = "#94A3B8"
-C_TEXT_PLACEHOLDER = "#64748B"
-C_BORDER = "#223047"
-C_BORDER_SOFT = "#1B2639"
-C_ACCENT = "#8B5CF6"
-C_ACCENT_HOVER = "#7C3AED"
-C_ACCENT_2 = "#2563EB"
-C_USER_ACCENT = "#0EA5E9"
+C_BG_ROOT = "#05070D"
+C_BG_PANEL = "#080D16"
+C_BG_PANEL_ALT = "#0B1220"
+C_BG_SIDEBAR = "#070B12"
+C_BG_SURFACE = "#0D1522"
+C_BG_SURFACE_ALT = "#111C2D"
+C_BG_INPUT = "#0B1220"
+C_BG_INPUT_WRAP = "#0D1624"
+C_TEXT_MAIN = "#EEF2F7"
+C_TEXT_SUB = "#9AA8BA"
+C_TEXT_PLACEHOLDER = "#66758A"
+C_BORDER = "#1A2535"
+C_BORDER_SOFT = "#121C2A"
+C_ACCENT = "#38BDF8"
+C_ACCENT_HOVER = "#0EA5E9"
+C_ACCENT_2 = "#14B8A6"
+C_USER_ACCENT = "#38BDF8"
 C_ERROR = "#F87171"
 
 
@@ -1779,7 +1779,7 @@ class ChatWindow(QMainWindow):
         splitter.addWidget(self._build_chat_area())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([280, 900])
+        splitter.setSizes([264, 920])
         layout.addWidget(splitter, 1)
 
         layout.addWidget(self._build_status_bar())
@@ -1805,22 +1805,22 @@ class ChatWindow(QMainWindow):
 
     def _build_title_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setFixedHeight(52)
+        bar.setFixedHeight(46)
         bar.setStyleSheet(
-            f"background: rgba(9, 16, 27, 0.94); border-bottom: 1px solid {C_BORDER};"
+            f"background: rgba(5, 7, 13, 0.96); border-bottom: 1px solid {C_BORDER_SOFT};"
         )
 
         h = QHBoxLayout(bar)
-        h.setContentsMargins(16, 0, 12, 0)
-        h.setSpacing(12)
+        h.setContentsMargins(16, 0, 16, 0)
+        h.setSpacing(10)
 
         brand = QLabel("K")
-        brand.setFixedSize(26, 26)
+        brand.setFixedSize(24, 24)
         brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand.setStyleSheet(
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
             f"stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2}); color: #fff; "
-            "border-radius: 13px; font-size: 13px; font-weight: 800;"
+            "border-radius: 8px; font-size: 12px; font-weight: 800;"
         )
         h.addWidget(brand)
 
@@ -1841,36 +1841,24 @@ class ChatWindow(QMainWindow):
         h.addLayout(title_stack)
         h.addStretch(1)
 
-        for icon, tip in (("⋯", _t("more")), ("⚙", _t("settings_dev"))):
-            btn = QPushButton(icon)
-            btn.setFixedSize(34, 30)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(
-                f"background: rgba(255, 255, 255, 0.04); color: {C_TEXT_SUB}; "
-                f"border: 1px solid {C_BORDER}; border-radius: 10px; font-size: 15px;"
-            )
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda *_: QMessageBox.information(self, "kagent", _t("feature_in_development")))
-            h.addWidget(btn)
-
         return bar
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
-        sidebar.setFixedWidth(280)
+        sidebar.setFixedWidth(264)
         sidebar.setStyleSheet(
-            f"background: rgba(9, 16, 27, 0.94); border-right: 1px solid {C_BORDER};"
+            f"background: rgba(7, 11, 18, 0.96); border-right: 1px solid {C_BORDER_SOFT};"
         )
 
         v = QVBoxLayout(sidebar)
-        v.setContentsMargins(12, 14, 12, 12)
-        v.setSpacing(10)
+        v.setContentsMargins(10, 12, 10, 10)
+        v.setSpacing(8)
 
         self.new_btn = QPushButton(_t("new_chat"))
         self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_btn.setStyleSheet(
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2}); "
-            "color: #fff; border: none; border-radius: 14px; padding: 12px 14px; "
+            "color: #03111A; border: none; border-radius: 12px; padding: 10px 12px; "
             "font-size: 13px; font-weight: 800;"
         )
         self.new_btn.clicked.connect(self.new_session)
@@ -1879,9 +1867,9 @@ class ChatWindow(QMainWindow):
         self.new_folder_btn = QPushButton(_t("new_chat_for_folder"))
         self.new_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_folder_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); color: #CBD5E1; "
-            f"border: 1px solid {C_BORDER}; border-radius: 14px; "
-            "padding: 10px 12px; font-size: 12px; font-weight: 800;"
+            "background: rgba(255, 255, 255, 0.025); color: #CBD5E1; "
+            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
+            "padding: 9px 12px; font-size: 12px; font-weight: 700;"
         )
         self.new_folder_btn.clicked.connect(self.new_session_from_folder)
         v.addWidget(self.new_folder_btn)
@@ -1899,16 +1887,16 @@ QListWidget {{
     font-family: "Microsoft YaHei", "Segoe UI";
 }}
 QListWidget::item {{
-    padding: 12px 12px;
-    margin: 4px 4px;
-    border-radius: 12px;
+    padding: 10px 11px;
+    margin: 3px 2px;
+    border-radius: 10px;
 }}
 QListWidget::item:hover {{
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.035);
 }}
 QListWidget::item:selected {{
-    background: rgba(124, 58, 237, 0.16);
-    color: #F5F3FF;
+    background: rgba(56, 189, 248, 0.13);
+    color: #E0F2FE;
 }}
 """.strip()
         )
@@ -1917,7 +1905,7 @@ QListWidget::item:selected {{
 
         self.sidebar_tip_label = QLabel(_t("sidebar_shortcuts"))
         self.sidebar_tip_label.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px; padding: 4px 2px;")
-        v.addWidget(self.sidebar_tip_label)
+        self.sidebar_tip_label.setVisible(False)
 
         return sidebar
 
@@ -1940,7 +1928,7 @@ QListWidget::item:selected {{
         self.chat_scroll.setStyleSheet(
             f"""
 QScrollArea {{
-    background: {C_BG_PANEL};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C_BG_PANEL_ALT}, stop:1 {C_BG_PANEL});
     border: none;
 }}
 QScrollBar:vertical {{
@@ -1969,8 +1957,8 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self.chat_content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.chat_content.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_content)
-        self.chat_layout.setContentsMargins(24, 22, 24, 22)
-        self.chat_layout.setSpacing(14)
+        self.chat_layout.setContentsMargins(28, 24, 28, 24)
+        self.chat_layout.setSpacing(12)
         self.chat_scroll.setWidget(self.chat_content)
         self.chat_scroll.verticalScrollBar().valueChanged.connect(self._update_scroll_to_bottom_button)
         self.chat_scroll.verticalScrollBar().rangeChanged.connect(self._update_scroll_to_bottom_button)
@@ -2137,8 +2125,8 @@ QListWidget::item:selected {{
         self.rollback_restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.rollback_restore_btn.clicked.connect(self._restore_selected_rollback)
         self.rollback_restore_btn.setStyleSheet(
-            "background: rgba(124, 58, 237, 0.18); color: #E9D5FF; "
-            "border: 1px solid rgba(124, 58, 237, 0.32); border-radius: 10px; "
+            "background: rgba(56, 189, 248, 0.14); color: #BAE6FD; "
+            "border: 1px solid rgba(56, 189, 248, 0.32); border-radius: 10px; "
             "padding: 7px 12px; font-size: 11px; font-weight: 700;"
         )
         actions.addWidget(self.rollback_restore_btn)
@@ -2152,14 +2140,14 @@ QListWidget::item:selected {{
 
     def _build_chat_header(self) -> QFrame:
         header = QFrame()
-        header.setFixedHeight(74)
+        header.setFixedHeight(64)
         header.setStyleSheet(
-            f"background: rgba(10, 16, 27, 0.90); border-bottom: 1px solid {C_BORDER};"
+            f"background: rgba(8, 13, 22, 0.88); border-bottom: 1px solid {C_BORDER_SOFT};"
         )
 
         h = QHBoxLayout(header)
-        h.setContentsMargins(22, 14, 22, 14)
-        h.setSpacing(12)
+        h.setContentsMargins(22, 10, 22, 10)
+        h.setSpacing(10)
 
         title_stack = QVBoxLayout()
         title_stack.setSpacing(2)
@@ -2186,9 +2174,9 @@ QListWidget::item:selected {{
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.clicked.connect(self._open_permission_settings)
         self.settings_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
             f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 12px; font-size: 12px; font-weight: 800;"
+            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
         )
         h.addWidget(self.settings_btn)
 
@@ -2196,9 +2184,9 @@ QListWidget::item:selected {{
         self.diff_review_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.diff_review_btn.clicked.connect(self._show_current_diff_review)
         self.diff_review_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
             f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 12px; font-size: 12px; font-weight: 800;"
+            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
         )
         h.addWidget(self.diff_review_btn)
 
@@ -2209,14 +2197,15 @@ QListWidget::item:selected {{
         h.addWidget(self.rollback_history_btn)
         self._sync_rollback_history_button_style()
 
-        self.chat_model_chip = _chip_label(MODEL, "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
-        self.chat_mode_chip = _chip_label("Chat", "#DBEAFE", "rgba(37, 99, 235, 0.16)", "rgba(37, 99, 235, 0.34)")
+        self.chat_model_chip = _chip_label(MODEL, "#BAE6FD", "rgba(56, 189, 248, 0.12)", "rgba(56, 189, 248, 0.28)")
+        self.chat_mode_chip = _chip_label("Chat", "#CCFBF1", "rgba(20, 184, 166, 0.12)", "rgba(20, 184, 166, 0.28)")
         self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
-            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-            "border: 1px solid rgba(124, 58, 237, 0.34); border-radius: 999px; "
+            "background: rgba(20, 184, 166, 0.12); color: #CCFBF1; "
+            "border: 1px solid rgba(20, 184, 166, 0.30); border-radius: 999px; "
             "padding: 4px 10px; font-size: 11px; font-weight: 700;"
         )
+        self.chat_model_chip.setVisible(False)
         h.addWidget(self.chat_model_chip)
         h.addWidget(self.chat_mode_chip)
 
@@ -2224,21 +2213,21 @@ QListWidget::item:selected {{
 
     def _build_input_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setFixedHeight(128)
-        bar.setStyleSheet(f"background: rgba(8, 12, 20, 0.96); border-top: 1px solid {C_BORDER};")
+        bar.setFixedHeight(118)
+        bar.setStyleSheet(f"background: rgba(5, 7, 13, 0.96); border-top: 1px solid {C_BORDER_SOFT};")
 
         h = QHBoxLayout(bar)
-        h.setContentsMargins(18, 14, 18, 16)
+        h.setContentsMargins(18, 12, 18, 14)
         h.setSpacing(12)
 
         wrap = QFrame()
         wrap.setStyleSheet(
-            f"background: rgba(15, 23, 42, 0.92); border: 1px solid {C_BORDER}; border-radius: 22px;"
+            f"background: rgba(13, 22, 36, 0.94); border: 1px solid {C_BORDER}; border-radius: 18px;"
         )
 
         w = QVBoxLayout(wrap)
-        w.setContentsMargins(16, 14, 16, 12)
-        w.setSpacing(10)
+        w.setContentsMargins(15, 12, 15, 10)
+        w.setSpacing(8)
 
         self.input = InputBox(self.on_send)
         self.input.setStyleSheet(
@@ -2254,7 +2243,6 @@ QListWidget::item:selected {{
 
         hint = QLabel(_t("input_shortcut_hint"))
         hint.setStyleSheet(f"color: {C_TEXT_PLACEHOLDER}; font-size: 11px;")
-        hint.setText(_t("input_hint"))
         self.input_hint_label = hint
         actions.addWidget(hint)
         actions.addStretch(1)
@@ -2273,9 +2261,9 @@ QListWidget::item:selected {{
         self.permission_menu_btn = QPushButton(_t("permissions"))
         self.permission_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.permission_menu_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
             f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 8px 12px; font-size: 12px; font-weight: 800;"
+            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
         )
         self.permission_menu_btn.clicked.connect(self._show_permission_menu)
         actions.addWidget(self.permission_menu_btn)
@@ -2287,9 +2275,9 @@ QListWidget::item:selected {{
         )
         self.workspace_btn.clicked.connect(self._show_workspace_menu)
         self.workspace_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
             f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 8px 12px; font-size: 12px; font-weight: 800;"
+            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
         )
         actions.addWidget(self.workspace_btn)
 
@@ -2311,13 +2299,14 @@ QListWidget::item:selected {{
 
     def _build_status_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setFixedHeight(28)
-        bar.setStyleSheet(f"background: rgba(8, 12, 20, 0.96); border-top: 1px solid {C_BORDER};")
+        bar.setFixedHeight(24)
+        bar.setStyleSheet(f"background: rgba(5, 7, 13, 0.96); border-top: 1px solid {C_BORDER_SOFT};")
 
         h = QHBoxLayout(bar)
         h.setContentsMargins(16, 0, 16, 0)
 
         self.status_model = _chip_label(MODEL, "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
+        self.status_model.setVisible(False)
         h.addWidget(self.status_model)
         h.addStretch(1)
 
@@ -2334,15 +2323,15 @@ QListWidget::item:selected {{
         self.rollback_history_btn.setText(_t("history"))
         if self._rollback_history_visible:
             self.rollback_history_btn.setStyleSheet(
-                "background: rgba(37, 99, 235, 0.18); color: #DBEAFE; "
-                "border: 1px solid rgba(96, 165, 250, 0.38); border-radius: 12px; "
-                "padding: 7px 12px; font-size: 12px; font-weight: 800;"
+                "background: rgba(56, 189, 248, 0.14); color: #BAE6FD; "
+                "border: 1px solid rgba(56, 189, 248, 0.34); border-radius: 12px; "
+                "padding: 7px 11px; font-size: 12px; font-weight: 700;"
             )
         else:
             self.rollback_history_btn.setStyleSheet(
-                "background: rgba(255, 255, 255, 0.04); color: #94A3B8; "
+                "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
                 f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-                "padding: 7px 12px; font-size: 12px; font-weight: 800;"
+                "padding: 7px 11px; font-size: 12px; font-weight: 700;"
             )
 
     def _activity_label(self) -> str:
@@ -2390,7 +2379,7 @@ QListWidget::item:selected {{
         if hasattr(self, "input"):
             self.input.setPlaceholderText(_t("input_hint"))
         if hasattr(self, "input_hint_label"):
-            self.input_hint_label.setText(_t("input_hint"))
+            self.input_hint_label.setText(_t("input_shortcut_hint"))
         if hasattr(self, "agent_btn"):
             self.agent_btn.setToolTip(_t("agent_mode_tip"))
         if hasattr(self, "send_btn"):
@@ -2769,48 +2758,30 @@ QListWidget::item:selected {{
 
     def _build_empty_state(self) -> QFrame:
         card = QFrame()
-        card.setFixedWidth(600)
+        card.setFixedWidth(430)
         card.setStyleSheet(
-            "background: rgba(15, 23, 42, 0.94); "
-            f"border: 1px solid {C_BORDER}; border-radius: 24px;"
+            "background: rgba(13, 22, 36, 0.78); "
+            f"border: 1px solid {C_BORDER}; border-radius: 22px;"
         )
 
         v = QVBoxLayout(card)
-        v.setContentsMargins(28, 26, 28, 22)
-        v.setSpacing(14)
+        v.setContentsMargins(26, 24, 26, 22)
+        v.setSpacing(10)
 
         badge = QLabel("K")
-        badge.setFixedSize(58, 58)
+        badge.setFixedSize(44, 44)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2}); "
-            "color: #fff; border-radius: 18px; font-size: 26px; font-weight: 800;"
+            "color: #03111A; border-radius: 14px; font-size: 20px; font-weight: 800;"
         )
         badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         v.addWidget(badge, 0, Qt.AlignmentFlag.AlignHCenter)
 
         title = QLabel("kagent")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 28px; font-weight: 800;")
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 24px; font-weight: 800;")
         v.addWidget(title)
-
-        subtitle = QLabel(_t("empty_subtitle"))
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 14px; line-height: 1.5;")
-        v.addWidget(subtitle)
-
-        chips = QHBoxLayout()
-        chips.setSpacing(8)
-        chips.addStretch(1)
-        for text, fg, bg, border in (
-            (_t("feature_streaming"), "#E9D5FF", "rgba(124, 58, 237, 0.14)", "rgba(124, 58, 237, 0.28)"),
-            (_t("feature_multi_turn"), "#DBEAFE", "rgba(37, 99, 235, 0.14)", "rgba(37, 99, 235, 0.28)"),
-            (_t("feature_agent_tools"), "#BBF7D0", "rgba(34, 197, 94, 0.12)", "rgba(34, 197, 94, 0.26)"),
-        ):
-            chips.addWidget(_chip_label(text, fg, bg, border))
-        chips.addStretch(1)
-        v.addLayout(chips)
 
         hint = QLabel(_t("input_shortcut_hint"))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3413,7 +3384,7 @@ QListWidget::item:selected {{
         else:
             self.send_btn.setStyleSheet(
                 f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2}); "
-                "color: #fff; border: none; border-radius: 14px; padding: 8px 18px; "
+                "color: #03111A; border: none; border-radius: 14px; padding: 8px 18px; "
                 "font-size: 13px; font-weight: 800;"
             )
 
@@ -3444,9 +3415,9 @@ QListWidget::item:selected {{
     def _sync_mode_button_style(self):
         if self.agent_btn.isChecked():
             self.agent_btn.setStyleSheet(
-                "background: rgba(124, 58, 237, 0.18); color: #E9D5FF; "
-                "border: 1px solid rgba(124, 58, 237, 0.42); border-radius: 12px; "
-                "padding: 8px 12px; font-size: 12px; font-weight: 800;"
+                "background: rgba(56, 189, 248, 0.14); color: #BAE6FD; "
+                "border: 1px solid rgba(56, 189, 248, 0.34); border-radius: 12px; "
+                "padding: 8px 12px; font-size: 12px; font-weight: 700;"
             )
         else:
             self.agent_btn.setStyleSheet(
@@ -3476,8 +3447,8 @@ QListWidget::item:selected {{
         self.chat_subtitle_label.setText(f"{MODEL} ? Workspace ? {count} ??? ? {self._activity}")
         self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
-            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-            "border: 1px solid rgba(124, 58, 237, 0.34); border-radius: 999px; "
+            "background: rgba(20, 184, 166, 0.12); color: #CCFBF1; "
+            "border: 1px solid rgba(20, 184, 166, 0.30); border-radius: 999px; "
             "padding: 4px 10px; font-size: 11px; font-weight: 700;"
         )
 

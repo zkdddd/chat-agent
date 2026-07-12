@@ -10,6 +10,7 @@
 - The sidebar now has a folder-based new chat action that creates a separate chat bound to the selected folder.
 - The current project button now sits next to the permission button and shows the selected folder name.
 - The current project menu next to permissions can now switch to `No folder`, while the sidebar keeps only normal new chat and folder-based new chat.
+- The main UI has been simplified with a calmer dark theme, fewer persistent badges, shorter input hints, and a cleaner empty state.
 
 Agent 功能演进记录见：[docs/agent-development.md](docs/agent-development.md)
 
