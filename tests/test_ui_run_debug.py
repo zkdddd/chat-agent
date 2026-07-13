@@ -3,6 +3,9 @@ from kagent.ui.main_window import (
     _diff_review_markdown,
     _resume_task_prompt,
     _run_debug_markdown,
+    _plan_steps_summary,
+    _project_quick_prompts,
+    _recent_workspace_roots,
     _session_workspace_summary,
     _session_title_for_workspace,
     _tool_entry_actions,
@@ -166,10 +169,63 @@ def test_workspace_button_label_shows_current_project_folder(tmp_path, monkeypat
 def test_new_chat_label_distinguishes_normal_chat_from_folder_picker(monkeypatch):
     monkeypatch.setattr("kagent.config.APP_LANGUAGE", "zh")
     assert _t("new_chat") == "+  新增会话"
-    assert _t("new_chat_for_folder") == "+  选择文件夹新建会话"
+    assert _t("new_chat_for_folder") == "+  新建项目会话"
     assert _t("clear_workspace") == "不选择文件夹"
 
     monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
     assert _t("new_chat") == "+  New chat"
-    assert _t("new_chat_for_folder") == "+  New chat from folder"
+    assert _t("new_chat_for_folder") == "+  New project chat"
     assert _t("clear_workspace") == "No folder"
+
+
+def test_empty_state_prompt_labels_follow_language(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    assert _t("prompt_check_project") == "Check project"
+    assert _t("prompt_fix_tests") == "Fix tests"
+    assert _t("prompt_explain_project") == "Explain project"
+    assert "project structure" in _t("prompt_check_project_text")
+
+
+def test_recent_workspace_roots_deduplicates_existing_paths(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    roots = _recent_workspace_roots(
+        [
+            {"workspace_root": str(first)},
+            {"workspace_root": str(first)},
+            {"workspace_root": ""},
+            {"workspace_root": str(second)},
+            {"workspace_root": str(tmp_path / "missing")},
+        ]
+    )
+
+    assert roots == [str(first.resolve()), str(second.resolve())]
+
+
+def test_project_quick_prompts_include_entry_file_context(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+    (tmp_path / "main.py").write_text("print('hi')", encoding="utf-8")
+
+    prompts = _project_quick_prompts(str(tmp_path))
+
+    assert [item["label"] for item in prompts] == ["Run tests", "Find TODOs", "Read entry files"]
+    assert "main.py" in prompts[2]["prompt"]
+
+
+def test_plan_steps_summary_marks_statuses():
+    lines = _plan_steps_summary(
+        [
+            {"title": "Inspect", "status": "done"},
+            {"title": "Edit", "status": "active", "detail": "Updating UI"},
+            {"title": "Validate", "status": "pending"},
+        ]
+    )
+
+    assert lines[0].startswith("✓ Inspect")
+    assert "● Edit" in lines[1]
+    assert "Updating UI" in lines[1]
+    assert lines[2].startswith("○ Validate")

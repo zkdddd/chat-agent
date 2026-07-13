@@ -1,5 +1,89 @@
 # Agent Development Log
 
+## 2026-07-13: Command Palette, Recent Workspaces, And Plan UI
+
+### What changed
+
+- Added a `Ctrl+K` command palette for common actions: new chat, new project chat, switch project, no-folder mode, diff review, rollback history, permissions, and resume latest task.
+- Added recent workspace entries to the current project menu using existing session workspace history.
+- Added an Agent Plan panel that renders existing `agent_plan` stream events as compact status lines.
+- Updated empty-state suggestions to use project-map context, including entry/config files when available.
+- Added small design tokens for shared radius values and continued moving UI styling toward reusable helpers.
+
+### Why
+
+- Command palettes and recent workspaces reduce button hunting and repeated folder picking.
+- A visible plan panel makes the coding agent feel more intentional than raw tool logs alone.
+- Project-aware suggestions make the first screen more useful when a workspace is selected.
+
+### Impacted modules
+
+- `kagent/ui/main_window.py`
+- `tests/test_ui_run_debug.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### Verification
+
+```text
+.\run-tests.bat
+```
+
+## 2026-07-13: UI Consistency And Entry Simplification
+
+### What changed
+
+- Added shared style helpers for secondary/primary/pill/danger buttons, menus, dialogs, and text views.
+- Merged the separate settings button into the permissions menu to reduce duplicate entry points.
+- Changed the bottom status bar from message count to read/write/command permission scope.
+- Shortened the folder-based sidebar action to `New project chat` and kept the folder picker explanation in the tooltip.
+- Updated Run Debug, Diff Review, and permission settings dialogs with consistent spacing, title styling, and surface colors.
+
+### Why
+
+- The previous UI mixed older purple styles, repeated metadata, and exposed both settings and permissions as separate concepts.
+- A coding-agent UI needs clearer hierarchy: one permissions entry, one primary send action, useful status-bar metadata, and consistent modal surfaces.
+
+### Impacted modules
+
+- `kagent/ui/main_window.py`
+- `tests/test_ui_run_debug.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### Verification
+
+```text
+.\run-tests.bat
+```
+
+## 2026-07-13: Product-Level UI Priority Pass
+
+### What changed
+
+- Added quick-start prompt buttons to the empty chat state: project inspection, test repair, and project explanation.
+- Added a current-session dot marker to sidebar rows while keeping project/no-folder context and time metadata.
+- Kept permission/project controls as lightweight input-row capsules and the send button as the primary action.
+- Kept no-folder sessions explicit as normal chat with no file access.
+- Changed Agent tool activity toward a compact timeline trace with status dots instead of large standalone cards.
+
+### Why
+
+- These changes align the desktop UI more closely with mature coding-agent products: faster first action, clearer workspace state, and less visual noise during tool execution.
+
+### Impacted modules
+
+- `kagent/ui/main_window.py`
+- `tests/test_ui_run_debug.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### Verification
+
+```text
+.\run-tests.bat
+```
+
 ## 2026-07-13: UI Session And No-Folder Clarity
 
 ### What changed

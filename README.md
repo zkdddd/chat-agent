@@ -14,6 +14,15 @@
 - The sidebar session list now shows clearer project/no-folder context, current-chat state, and creation time.
 - The input action row now separates lightweight permission/project state pills from the primary send action.
 - No-folder chats now surface `Normal chat` / no-file-access state in the chat header and mode chip.
+- Empty chats now include three quick-start prompts for project inspection, test repair, and project explanation.
+- Agent tool activity now uses a more compact timeline-style trace with per-tool status dots.
+- Visual styling now uses shared button/menu/dialog/text-view helpers for more consistent cyan desktop UI.
+- The separate settings button was merged into the permissions menu, and the status bar now shows permission scope instead of duplicating message count.
+- The folder-based new chat action is now labeled `New project chat` with a folder-picker tooltip.
+- `Ctrl+K` now opens a command palette for common chat, workspace, diff, history, permission, and resume actions.
+- The project menu now shows recent workspace folders from previous sessions.
+- Agent runs now surface a compact execution plan panel when plan events are available.
+- Empty-state suggestions now use project-map context such as entry/config files when a workspace is selected.
 
 Agent 功能演进记录见：[docs/agent-development.md](docs/agent-development.md)
 

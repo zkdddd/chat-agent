@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -37,9 +38,10 @@ from dotenv import set_key
 from .. import config as app_config
 from .. import db
 from ..agent import WorkspaceTools
+from ..agent.project_map import build_project_map, summarize_project_map
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_self_check import format_run_health_report
-from ..agent.task_resume import build_resume_context, format_resume_context
+from ..agent.task_resume import build_latest_resume_context, build_resume_context, format_resume_context
 from ..config import MODEL
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
@@ -66,11 +68,15 @@ C_ACCENT_HOVER = "#0EA5E9"
 C_ACCENT_2 = "#14B8A6"
 C_USER_ACCENT = "#38BDF8"
 C_ERROR = "#F87171"
+C_RADIUS_SM = 10
+C_RADIUS_MD = 12
+C_RADIUS_LG = 16
+C_RADIUS_XL = 22
 
 
 UI_TEXT = {
     "zh": {
-        "settings": "设置",
+        "settings": "权限",
         "settings_title": "设置",
         "settings_heading": "应用设置",
         "language": "语言",
@@ -110,7 +116,7 @@ UI_TEXT = {
         "workspace_button_label": "当前项目：{name}",
         "workspace_button_tooltip": "点击切换当前会话的目标项目：{path}",
         "new_chat": "+  新增会话",
-        "new_chat_for_folder": "+  选择文件夹新建会话",
+        "new_chat_for_folder": "+  新建项目会话",
         "select_workspace_for_new_chat": "选择新会话的工作区",
         "clear_workspace": "不选择文件夹",
         "no_project": "未选择项目",
@@ -122,6 +128,32 @@ UI_TEXT = {
         "project_chat_mode": "项目会话",
         "session_current_marker": "当前",
         "session_created_at": "创建于 {time}",
+        "prompt_check_project": "检查项目结构",
+        "prompt_fix_tests": "修复测试失败",
+        "prompt_explain_project": "解释这个项目",
+        "prompt_check_project_text": "请检查当前项目结构，说明主要模块、入口文件、测试入口，以及下一步建议。",
+        "prompt_fix_tests_text": "请运行项目测试，定位失败原因并修复，最后告诉我修改内容和验证结果。",
+        "prompt_explain_project_text": "请解释当前项目的功能、代码结构、运行方式和主要风险点。",
+        "command_palette": "命令面板",
+        "command_palette_placeholder": "输入命令，例如：切换项目 / 新建会话 / 查看差异",
+        "command_new_chat": "新增会话",
+        "command_new_project_chat": "新建项目会话",
+        "command_switch_workspace": "切换项目",
+        "command_no_folder": "不选择文件夹",
+        "command_diff_review": "查看当前差异",
+        "command_toggle_history": "切换回滚历史",
+        "command_permissions": "打开权限设置",
+        "command_resume_latest": "恢复最近任务",
+        "recent_workspaces": "最近项目",
+        "agent_plan": "执行计划",
+        "agent_plan_waiting": "等待计划生成",
+        "suggest_run_tests": "运行项目测试",
+        "suggest_scan_todo": "查找 TODO",
+        "suggest_read_entry": "阅读入口文件",
+        "suggest_run_tests_text": "请根据当前项目结构选择合适的测试命令并运行，失败时定位原因。",
+        "suggest_scan_todo_text": "请扫描当前项目里的 TODO/FIXME/临时实现，并按优先级列出建议处理项。",
+        "suggest_read_entry_text": "请阅读当前项目入口文件和核心配置，说明启动流程和主要模块。",
+        "no_recent_workspaces": "暂无最近项目",
         "input_hint": "用自然语言描述任务，Agent 会自己决定是否读取文件、修改代码和执行命令",
         "send": "发送",
         "stop": "停止",
@@ -249,7 +281,7 @@ UI_TEXT = {
         "rollback_history_title": "回滚历史",
     },
     "en": {
-        "settings": "Settings",
+        "settings": "Permissions",
         "settings_title": "Settings",
         "settings_heading": "App Settings",
         "language": "Language",
@@ -289,7 +321,7 @@ UI_TEXT = {
         "workspace_button_label": "Project: {name}",
         "workspace_button_tooltip": "Click to switch the target project for this chat: {path}",
         "new_chat": "+  New chat",
-        "new_chat_for_folder": "+  New chat from folder",
+        "new_chat_for_folder": "+  New project chat",
         "select_workspace_for_new_chat": "Select workspace for new chat",
         "clear_workspace": "No folder",
         "no_project": "No project selected",
@@ -301,6 +333,32 @@ UI_TEXT = {
         "project_chat_mode": "Project chat",
         "session_current_marker": "Current",
         "session_created_at": "Created {time}",
+        "prompt_check_project": "Check project",
+        "prompt_fix_tests": "Fix tests",
+        "prompt_explain_project": "Explain project",
+        "prompt_check_project_text": "Inspect the current project structure and summarize the main modules, entry points, test entry, and suggested next steps.",
+        "prompt_fix_tests_text": "Run the project tests, diagnose any failures, fix them, and report the changes and verification result.",
+        "prompt_explain_project_text": "Explain this project's purpose, code structure, run workflow, and main risks.",
+        "command_palette": "Command Palette",
+        "command_palette_placeholder": "Type a command, e.g. switch project / new chat / diff",
+        "command_new_chat": "New chat",
+        "command_new_project_chat": "New project chat",
+        "command_switch_workspace": "Switch project",
+        "command_no_folder": "No folder",
+        "command_diff_review": "Show current diff",
+        "command_toggle_history": "Toggle rollback history",
+        "command_permissions": "Open permissions",
+        "command_resume_latest": "Resume latest task",
+        "recent_workspaces": "Recent projects",
+        "agent_plan": "Plan",
+        "agent_plan_waiting": "Waiting for plan",
+        "suggest_run_tests": "Run tests",
+        "suggest_scan_todo": "Find TODOs",
+        "suggest_read_entry": "Read entry files",
+        "suggest_run_tests_text": "Choose and run the right test command for this project. If it fails, diagnose the cause.",
+        "suggest_scan_todo_text": "Scan this project for TODO/FIXME/temporary implementations and list the highest-priority follow-ups.",
+        "suggest_read_entry_text": "Read the project entry files and core config, then explain the startup flow and main modules.",
+        "no_recent_workspaces": "No recent projects",
         "input_hint": "Describe a task. Agent can read files, edit code, and run commands when needed.",
         "send": "Send",
         "stop": "Stop",
@@ -589,6 +647,94 @@ def _chip_label(text: str, fg: str, bg: str, border: str) -> QLabel:
     return label
 
 
+def _button_style(kind: str = "secondary", *, radius: int = 12, compact: bool = False) -> str:
+    padding = "6px 10px" if compact else "7px 12px"
+    size = "11px" if compact else "12px"
+    weight = "700"
+    if kind == "primary":
+        return (
+            "QPushButton {"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2});"
+            "color: #03111A;"
+            "border: none;"
+            f"border-radius: {radius}px;"
+            f"padding: {padding};"
+            f"font-size: {size};"
+            f"font-weight: {weight};"
+            "}"
+            "QPushButton:disabled { background: rgba(148, 163, 184, 0.14); color: #64748B; }"
+        )
+    if kind == "pill":
+        return (
+            "QPushButton {"
+            "background: rgba(255, 255, 255, 0.018);"
+            "color: #8EA0B5;"
+            f"border: 1px solid {C_BORDER_SOFT};"
+            "border-radius: 999px;"
+            f"padding: {padding};"
+            f"font-size: {size};"
+            f"font-weight: {weight};"
+            "}"
+            "QPushButton:hover { background: rgba(56, 189, 248, 0.08); color: #BAE6FD; }"
+        )
+    if kind == "danger":
+        return (
+            "QPushButton {"
+            "background: rgba(239, 68, 68, 0.14); color: #FCA5A5;"
+            "border: 1px solid rgba(248, 113, 113, 0.28);"
+            f"border-radius: {radius}px;"
+            f"padding: {padding};"
+            f"font-size: {size};"
+            f"font-weight: {weight};"
+            "}"
+            "QPushButton:disabled { background: rgba(148, 163, 184, 0.10); color: #64748B; }"
+        )
+    return (
+        "QPushButton {"
+        "background: rgba(255, 255, 255, 0.026);"
+        "color: #CBD5E1;"
+        f"border: 1px solid {C_BORDER};"
+        f"border-radius: {radius}px;"
+        f"padding: {padding};"
+        f"font-size: {size};"
+        f"font-weight: {weight};"
+        "}"
+        "QPushButton:hover { background: rgba(56, 189, 248, 0.08); border-color: rgba(56, 189, 248, 0.28); }"
+    )
+
+
+def _dialog_style() -> str:
+    return (
+        f"QDialog {{ background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; }}"
+        f"QLabel {{ color: {C_TEXT_SUB}; }}"
+        "QDialogButtonBox QPushButton {"
+        "background: rgba(255, 255, 255, 0.026);"
+        "color: #CBD5E1;"
+        f"border: 1px solid {C_BORDER};"
+        "border-radius: 10px;"
+        "padding: 6px 12px;"
+        "font-size: 11px;"
+        "font-weight: 700;"
+        "}"
+        "QDialogButtonBox QPushButton:hover { background: rgba(56, 189, 248, 0.08); }"
+    )
+
+
+def _text_view_style() -> str:
+    return (
+        f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+        f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 10px;"
+    )
+
+
+def _menu_style() -> str:
+    return (
+        f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; border: 1px solid {C_BORDER};"
+        "QMenu::item { padding: 7px 26px 7px 12px; }"
+        "QMenu::item:selected { background: rgba(56, 189, 248, 0.14); }"
+    )
+
+
 def _avatar_label(text: str, bg: str, size: int = 34) -> QLabel:
     label = QLabel(text.upper())
     label.setFixedSize(size, size)
@@ -766,6 +912,76 @@ def _session_workspace_summary(session: dict[str, Any], *, current: bool = False
         return f"{_t('no_project_chat_mode')} · {_t('no_project_chat_detail')}{marker}"
     workspace_name = Path(workspace_root).name or workspace_root
     return f"{workspace_name} · {created}{marker}"
+
+
+def _recent_workspace_roots(sessions: list[dict[str, Any]], *, limit: int = 6) -> list[str]:
+    roots: list[str] = []
+    seen: set[str] = set()
+    for session in sessions:
+        raw = str(session.get("workspace_root") or "").strip()
+        if not raw:
+            continue
+        try:
+            root = str(Path(raw).expanduser().resolve())
+        except Exception:
+            root = raw
+        if root in seen or not Path(root).exists():
+            continue
+        seen.add(root)
+        roots.append(root)
+        if len(roots) >= limit:
+            break
+    return roots
+
+
+def _project_quick_prompts(workspace_root: str) -> list[dict[str, str]]:
+    prompts = [
+        {"label": _t("suggest_run_tests"), "prompt": _t("suggest_run_tests_text")},
+        {"label": _t("suggest_scan_todo"), "prompt": _t("suggest_scan_todo_text")},
+        {"label": _t("suggest_read_entry"), "prompt": _t("suggest_read_entry_text")},
+    ]
+    if not str(workspace_root or "").strip():
+        return prompts
+    try:
+        project_map = build_project_map(Path(workspace_root))
+        summary = summarize_project_map(project_map)
+    except Exception:
+        return prompts
+
+    entry_files = summary.get("entry_files") if isinstance(summary.get("entry_files"), list) else []
+    config_files = summary.get("config_files") if isinstance(summary.get("config_files"), list) else []
+    if entry_files:
+        prompts[2]["prompt"] = (
+            f"{_t('suggest_read_entry_text')}\n\n"
+            f"优先阅读这些入口文件 / Prioritize these entry files: {', '.join(str(item) for item in entry_files[:5])}"
+        )
+    elif config_files:
+        prompts[2]["prompt"] = (
+            f"{_t('suggest_read_entry_text')}\n\n"
+            f"优先阅读这些配置文件 / Prioritize these config files: {', '.join(str(item) for item in config_files[:5])}"
+        )
+    return prompts
+
+
+def _plan_steps_summary(plan: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for raw in plan[:6]:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get("status") or "pending")
+        title = str(raw.get("title") or raw.get("id") or "step")
+        detail = str(raw.get("detail") or "").strip()
+        marker = {
+            "done": "✓",
+            "active": "●",
+            "failed": "!",
+            "skipped": "–",
+        }.get(status, "○")
+        line = f"{marker} {title}"
+        if detail:
+            line += f" · {detail}"
+        lines.append(line)
+    return lines
 
 
 def _workspace_button_label(path: str | Path) -> str:
@@ -1198,13 +1414,13 @@ class ToolLogEntry(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         self.setFixedWidth(width)
         self.setStyleSheet(
-            "background: rgba(9, 16, 27, 0.92); "
-            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 16px;"
+            "background: rgba(255, 255, 255, 0.018); "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 12px;"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 9)
+        layout.setSpacing(6)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -1216,6 +1432,11 @@ class ToolLogEntry(QFrame):
         self.toggle_btn.setToolTip(_t("tool_detail_expand"))
         self.toggle_btn.setAutoRaise(True)
         self.toggle_btn.clicked.connect(self._set_expanded)
+
+        self.timeline_dot = QLabel("●")
+        self.timeline_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.timeline_dot.setFixedWidth(14)
+        self.timeline_dot.setStyleSheet("color: #38BDF8; font-size: 12px; font-weight: 900;")
 
         self.name_label = QLabel(name)
         self.name_label.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
@@ -1245,6 +1466,7 @@ class ToolLogEntry(QFrame):
         self.risk_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.risk_chip.setVisible(False)
 
+        header.addWidget(self.timeline_dot)
         header.addWidget(self.toggle_btn)
         header.addWidget(self.name_label)
         if round_idx is not None:
@@ -1476,11 +1698,17 @@ class ToolLogEntry(QFrame):
             )
         else:
             chip_style = (
-                "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-                "border: 1px solid rgba(124, 58, 237, 0.30); "
+                "background: rgba(56, 189, 248, 0.12); color: #BAE6FD; "
+                "border: 1px solid rgba(56, 189, 248, 0.26); "
                 "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
             )
         self.status_chip.setStyleSheet(chip_style)
+        dot_color = "#F87171" if error or status_key in {"rejected", "failed"} else "#38BDF8"
+        if status in {_t("tool_status_success"), "鎴愬姛", "Success"}:
+            dot_color = "#22C55E"
+        elif status in {_t("tool_status_failed"), "澶辫触", "Failed"}:
+            dot_color = "#F87171"
+        self.timeline_dot.setStyleSheet(f"color: {dot_color}; font-size: 12px; font-weight: 900;")
         self._summary_full = _tool_event_summary(
             self.name_label.text(),
             status,
@@ -1528,27 +1756,27 @@ class ToolTraceCard(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         self.setFixedWidth(width)
         self.setStyleSheet(
-            "background: rgba(15, 23, 42, 0.94); "
-            f"border: 1px solid rgba(124, 58, 237, 0.24); border-radius: 20px;"
+            "background: rgba(8, 13, 22, 0.78); "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 16px;"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
         header.setSpacing(8)
 
         title = QLabel(_t("agent_run_log"))
         title.setFont(QFont("Microsoft YaHei", 9, QFont.Weight.Bold))
-        title.setStyleSheet("color: #E9D5FF;")
+        title.setStyleSheet("color: #BAE6FD;")
 
         self.state_chip = QLabel(_t("tool_status_running"))
         self.state_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.state_chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.state_chip.setStyleSheet(
-            "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-            "border: 1px solid rgba(124, 58, 237, 0.30); "
+            "background: rgba(56, 189, 248, 0.12); color: #BAE6FD; "
+            "border: 1px solid rgba(56, 189, 248, 0.26); "
             "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
         )
 
@@ -1583,8 +1811,26 @@ class ToolTraceCard(QFrame):
         self.run_timeline_btn.clicked.connect(lambda: self._request_run_debug("timeline"))
         layout.addLayout(debug_row)
 
+        self.plan_card = QFrame()
+        self.plan_card.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.018); "
+            f"border: 1px solid {C_BORDER_SOFT}; border-radius: {C_RADIUS_MD}px;"
+        )
+        plan_layout = QVBoxLayout(self.plan_card)
+        plan_layout.setContentsMargins(10, 8, 10, 9)
+        plan_layout.setSpacing(5)
+        self.plan_title = QLabel(_t("agent_plan"))
+        self.plan_title.setStyleSheet("color: #BAE6FD; font-size: 11px; font-weight: 800;")
+        self.plan_body = QLabel(_t("agent_plan_waiting"))
+        self.plan_body.setWordWrap(True)
+        self.plan_body.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11px;")
+        plan_layout.addWidget(self.plan_title)
+        plan_layout.addWidget(self.plan_body)
+        self.plan_card.setVisible(False)
+        layout.addWidget(self.plan_card)
+
         self.entries_layout = QVBoxLayout()
-        self.entries_layout.setSpacing(10)
+        self.entries_layout.setSpacing(6)
         layout.addLayout(self.entries_layout)
 
         self.empty_label = QLabel(_t("agent_analyzing_tools"))
@@ -1602,6 +1848,11 @@ class ToolTraceCard(QFrame):
     def set_trust_summary(self, trust: dict[str, Any]) -> None:
         self._trust = dict(trust)
         self._refresh_run_meta()
+
+    def set_plan(self, plan: list[dict[str, Any]]) -> None:
+        lines = _plan_steps_summary(plan)
+        self.plan_body.setText("\n".join(lines) if lines else _t("agent_plan_waiting"))
+        self.plan_card.setVisible(bool(lines))
 
     def _refresh_run_meta(self) -> None:
         parts = []
@@ -1645,8 +1896,8 @@ class ToolTraceCard(QFrame):
             )
         else:
             style = (
-                "background: rgba(124, 58, 237, 0.16); color: #E9D5FF; "
-                "border: 1px solid rgba(124, 58, 237, 0.30); "
+                "background: rgba(56, 189, 248, 0.12); color: #BAE6FD; "
+                "border: 1px solid rgba(56, 189, 248, 0.26); "
                 "border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700;"
             )
         self.state_chip.setStyleSheet(style)
@@ -1699,14 +1950,11 @@ class PermissionSettingsDialog(QDialog):
         self.setWindowTitle(_t("settings_title"))
         self.setModal(True)
         self.setMinimumWidth(560)
-        self.setStyleSheet(
-            f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};"
-            f"QLabel {{ color: {C_TEXT_SUB}; }}"
-        )
+        self.setStyleSheet(_dialog_style())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(16)
 
         title = QLabel(_t("settings_heading"))
         title.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
@@ -1730,11 +1978,7 @@ class PermissionSettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        buttons.setStyleSheet(
-            "QPushButton { background: rgba(255, 255, 255, 0.06); color: #E5E7EB; "
-            f"border: 1px solid {C_BORDER}; border-radius: 10px; padding: 7px 14px; }}"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.10); }"
-        )
+        buttons.setStyleSheet("")
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if save_button is not None:
@@ -1763,6 +2007,86 @@ class PermissionSettingsDialog(QDialog):
         return {
             "APP_LANGUAGE": str(self.language.currentData() or "zh"),
         }
+
+
+class CommandPaletteDialog(QDialog):
+    def __init__(self, commands: list[dict[str, str]], parent: QWidget | None = None):
+        super().__init__(parent)
+        self._commands = [dict(command) for command in commands]
+        self.selected_action: str | None = None
+        self.setWindowTitle(_t("command_palette"))
+        self.setModal(True)
+        self.resize(520, 420)
+        self.setStyleSheet(_dialog_style())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(10)
+
+        title = QLabel(_t("command_palette"))
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 800;")
+        layout.addWidget(title)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(_t("command_palette_placeholder"))
+        self.search.setStyleSheet(
+            f"background: {C_BG_INPUT}; color: {C_TEXT_MAIN}; "
+            f"border: 1px solid {C_BORDER}; border-radius: {C_RADIUS_MD}px; "
+            "padding: 9px 11px; font-size: 13px;"
+        )
+        self.search.textChanged.connect(self._refresh)
+        layout.addWidget(self.search)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet(
+            f"""
+QListWidget {{
+    background: {C_BG_SURFACE};
+    border: 1px solid {C_BORDER};
+    border-radius: {C_RADIUS_LG}px;
+    color: {C_TEXT_MAIN};
+    outline: none;
+    font-size: 13px;
+}}
+QListWidget::item {{
+    padding: 10px 12px;
+    margin: 3px;
+    border-radius: {C_RADIUS_MD}px;
+}}
+QListWidget::item:selected {{
+    background: rgba(56, 189, 248, 0.14);
+    color: #E0F2FE;
+}}
+""".strip()
+        )
+        self.list_widget.itemDoubleClicked.connect(lambda _item: self._accept_current())
+        layout.addWidget(self.list_widget, 1)
+
+        self.search.returnPressed.connect(self._accept_current)
+        self._refresh("")
+        self.search.setFocus()
+
+    def _refresh(self, query: str) -> None:
+        query = str(query or "").strip().lower()
+        self.list_widget.clear()
+        for command in self._commands:
+            label = str(command.get("label") or "")
+            keywords = str(command.get("keywords") or "")
+            haystack = f"{label} {keywords}".lower()
+            if query and query not in haystack:
+                continue
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, str(command.get("action") or ""))
+            self.list_widget.addItem(item)
+        if self.list_widget.count():
+            self.list_widget.setCurrentRow(0)
+
+    def _accept_current(self) -> None:
+        item = self.list_widget.currentItem()
+        if item is None:
+            return
+        self.selected_action = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        self.accept()
 
 
 class ChatWindow(QMainWindow):
@@ -1816,6 +2140,9 @@ class ChatWindow(QMainWindow):
 
         self.new_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
         self.new_shortcut.activated.connect(self.new_session)
+
+        self.command_palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self.command_palette_shortcut.activated.connect(self._open_command_palette)
 
         self.delete_shortcut = QShortcut(QKeySequence("Delete"), self.session_list)
         self.delete_shortcut.activated.connect(self._delete_current_session)
@@ -1896,6 +2223,7 @@ class ChatWindow(QMainWindow):
 
         self.new_folder_btn = QPushButton(_t("new_chat_for_folder"))
         self.new_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_folder_btn.setToolTip(_t("select_workspace_for_new_chat"))
         self.new_folder_btn.setStyleSheet(
             "background: rgba(255, 255, 255, 0.025); color: #CBD5E1; "
             f"border: 1px solid {C_BORDER}; border-radius: 12px; "
@@ -2200,24 +2528,10 @@ QListWidget::item:selected {{
         h.addLayout(title_stack)
         h.addStretch(1)
 
-        self.settings_btn = QPushButton(_t("settings"))
-        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.clicked.connect(self._open_permission_settings)
-        self.settings_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
-            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
-        )
-        h.addWidget(self.settings_btn)
-
         self.diff_review_btn = QPushButton(_t("diff_review"))
         self.diff_review_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.diff_review_btn.clicked.connect(self._show_current_diff_review)
-        self.diff_review_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
-            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
-            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
-        )
+        self.diff_review_btn.setStyleSheet(_button_style("secondary", compact=True))
         h.addWidget(self.diff_review_btn)
 
         self.rollback_history_btn = QPushButton(_t("history"))
@@ -2262,7 +2576,7 @@ QListWidget::item:selected {{
         self.input = InputBox(self.on_send)
         self.input.setStyleSheet(
             f"background: transparent; border: none; color: {C_TEXT_MAIN}; "
-            f"selection-background-color: rgba(124, 58, 237, 0.32); "
+            f"selection-background-color: rgba(56, 189, 248, 0.24); "
             "font-size: 14px; font-family: 'Microsoft YaHei', 'Segoe UI';"
         )
         w.addWidget(self.input)
@@ -2290,11 +2604,7 @@ QListWidget::item:selected {{
 
         self.permission_menu_btn = QPushButton(_t("permissions"))
         self.permission_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.permission_menu_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.018); color: #8EA0B5; "
-            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 999px; "
-            "padding: 6px 10px; font-size: 11px; font-weight: 700;"
-        )
+        self.permission_menu_btn.setStyleSheet(_button_style("pill", compact=True))
         self.permission_menu_btn.clicked.connect(self._show_permission_menu)
         actions.addWidget(self.permission_menu_btn)
 
@@ -2304,11 +2614,7 @@ QListWidget::item:selected {{
             _tf("workspace_button_tooltip", path=self._current_workspace_root())
         )
         self.workspace_btn.clicked.connect(self._show_workspace_menu)
-        self.workspace_btn.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.018); color: #8EA0B5; "
-            f"border: 1px solid {C_BORDER_SOFT}; border-radius: 999px; "
-            "padding: 6px 10px; font-size: 11px; font-weight: 700;"
-        )
+        self.workspace_btn.setStyleSheet(_button_style("pill", compact=True))
         actions.addWidget(self.workspace_btn)
 
         self.send_btn = QPushButton(_t("send"))
@@ -2340,7 +2646,7 @@ QListWidget::item:selected {{
         h.addWidget(self.status_model)
         h.addStretch(1)
 
-        self.status_count = QLabel(f"0 {_t('messages')}")
+        self.status_count = QLabel("")
         self.status_count.setObjectName("statusText")
         self.status_count.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11.5px;")
         h.addWidget(self.status_count)
@@ -2372,6 +2678,13 @@ QListWidget::item:selected {{
             "Stopped": _t("stopped"),
         }
         return mapping.get(self._activity, self._activity)
+
+    def _permission_summary(self) -> str:
+        return (
+            f"{_t('read_permission')}: {self._scope_label(app_config.FILESYSTEM_READ_SCOPE)} | "
+            f"{_t('write_permission')}: {self._scope_label(app_config.FILESYSTEM_WRITE_SCOPE)} | "
+            f"{_t('command_permission')}: {self._scope_label(app_config.FILESYSTEM_COMMAND_SCOPE)}"
+        )
 
     def _apply_language_texts(self) -> None:
         self.setWindowTitle("kagent")
@@ -2457,9 +2770,7 @@ QListWidget::item:selected {{
         current: str,
     ) -> None:
         submenu = menu.addMenu(f"{label}: {self._scope_label(current)}")
-        submenu.setStyleSheet(
-            f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; border: 1px solid {C_BORDER};"
-        )
+        submenu.setStyleSheet(_menu_style())
         for value, value_label in (("workspace", _t("workspace_scope")), ("all", _t("all_scope"))):
             action = QAction(value_label, submenu)
             action.setCheckable(True)
@@ -2475,14 +2786,14 @@ QListWidget::item:selected {{
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; border: 1px solid {C_BORDER};"
-            "QMenu::item { padding: 7px 26px 7px 12px; }"
-            "QMenu::item:selected { background: rgba(37, 99, 235, 0.20); }"
-        )
+        menu.setStyleSheet(_menu_style())
         self._scope_action(menu, _t("read_permission"), "KAGENT_FS_READ_SCOPE", app_config.FILESYSTEM_READ_SCOPE)
         self._scope_action(menu, _t("write_permission"), "KAGENT_FS_WRITE_SCOPE", app_config.FILESYSTEM_WRITE_SCOPE)
         self._scope_action(menu, _t("command_permission"), "KAGENT_FS_COMMAND_SCOPE", app_config.FILESYSTEM_COMMAND_SCOPE)
+        menu.addSeparator()
+        settings_action = QAction(_t("settings_heading"), menu)
+        settings_action.triggered.connect(self._open_permission_settings)
+        menu.addAction(settings_action)
         menu.exec(self.permission_menu_btn.mapToGlobal(self.permission_menu_btn.rect().bottomLeft()))
 
     def _show_workspace_menu(self) -> None:
@@ -2491,11 +2802,17 @@ QListWidget::item:selected {{
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN}; border: 1px solid {C_BORDER};"
-            "QMenu::item { padding: 7px 26px 7px 12px; }"
-            "QMenu::item:selected { background: rgba(37, 99, 235, 0.20); }"
-        )
+        menu.setStyleSheet(_menu_style())
+        recent = _recent_workspace_roots(db.list_sessions())
+        if recent:
+            recent_menu = menu.addMenu(_t("recent_workspaces"))
+            recent_menu.setStyleSheet(_menu_style())
+            for root in recent:
+                action = QAction(Path(root).name or root, recent_menu)
+                action.setToolTip(root)
+                action.triggered.connect(lambda checked=False, selected=root: self._set_current_workspace_root(selected))
+                recent_menu.addAction(action)
+            menu.addSeparator()
         select_action = QAction(_t("select_workspace"), menu)
         select_action.triggered.connect(self._choose_workspace_for_session)
         menu.addAction(select_action)
@@ -2505,6 +2822,56 @@ QListWidget::item:selected {{
         menu.addAction(clear_action)
 
         menu.exec(self.workspace_btn.mapToGlobal(self.workspace_btn.rect().bottomLeft()))
+
+    def _command_palette_actions(self) -> list[dict[str, str]]:
+        return [
+            {"label": _t("command_new_chat"), "action": "new_chat", "keywords": "new chat session"},
+            {"label": _t("command_new_project_chat"), "action": "new_project_chat", "keywords": "folder workspace project"},
+            {"label": _t("command_switch_workspace"), "action": "switch_workspace", "keywords": "project workspace folder"},
+            {"label": _t("command_no_folder"), "action": "no_folder", "keywords": "plain chat no project"},
+            {"label": _t("command_diff_review"), "action": "diff_review", "keywords": "diff review changes"},
+            {"label": _t("command_toggle_history"), "action": "toggle_history", "keywords": "rollback history"},
+            {"label": _t("command_permissions"), "action": "permissions", "keywords": "settings language scope"},
+            {"label": _t("command_resume_latest"), "action": "resume_latest", "keywords": "resume task run log"},
+        ]
+
+    def _open_command_palette(self) -> None:
+        dialog = CommandPaletteDialog(self._command_palette_actions(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.selected_action:
+            return
+        self._execute_palette_action(dialog.selected_action)
+
+    def _execute_palette_action(self, action: str) -> None:
+        if action == "new_chat":
+            self.new_session()
+        elif action == "new_project_chat":
+            self.new_session_from_folder()
+        elif action == "switch_workspace":
+            self._choose_workspace_for_session()
+        elif action == "no_folder":
+            self._clear_workspace_for_session()
+        elif action == "diff_review":
+            self._show_current_diff_review()
+        elif action == "toggle_history":
+            self._toggle_rollback_history_panel(not self._rollback_history_visible)
+        elif action == "permissions":
+            self._show_permission_menu()
+        elif action == "resume_latest":
+            self._resume_latest_task()
+
+    def _resume_latest_task(self) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+        try:
+            context = build_latest_resume_context()
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", _tf("build_resume_context_failed", error=exc))
+            return
+        if not context:
+            QMessageBox.information(self, "kagent", _t("no_run_log_path"))
+            return
+        self._submit_text(_resume_task_prompt(context), clear_input=False)
 
     def _choose_workspace_for_session(self) -> None:
         if self._is_busy():
@@ -2672,8 +3039,10 @@ QListWidget::item:selected {{
 
     def _format_session_list_item(self, session: dict[str, Any]) -> str:
         title = str(session.get("title") or _t("new_session"))
-        summary = _session_workspace_summary(session, current=session.get("id") == self.current_session)
-        return f"{title}\n{summary}"
+        current = session.get("id") == self.current_session
+        summary = _session_workspace_summary(session, current=current)
+        marker = "● " if current else "  "
+        return f"{marker}{title}\n   {summary}"
 
     def _refresh_rollback_history_panel(self, select_id: int | None = None) -> None:
         if not hasattr(self, "rollback_list"):
@@ -2827,6 +3196,40 @@ QListWidget::item:selected {{
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 24px; font-weight: 800;")
         v.addWidget(title)
+
+        prompts = QVBoxLayout()
+        prompts.setSpacing(8)
+        quick_prompts = _project_quick_prompts(self._current_workspace_root())
+        if not quick_prompts:
+            quick_prompts = [
+                {"label": _t("prompt_check_project"), "prompt": _t("prompt_check_project_text")},
+                {"label": _t("prompt_fix_tests"), "prompt": _t("prompt_fix_tests_text")},
+                {"label": _t("prompt_explain_project"), "prompt": _t("prompt_explain_project_text")},
+            ]
+        for item in quick_prompts[:3]:
+            label = str(item.get("label") or "")
+            prompt = str(item.get("prompt") or "")
+            btn = QPushButton(label)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton {"
+                "background: rgba(255, 255, 255, 0.026);"
+                "color: #DDE7F3;"
+                f"border: 1px solid {C_BORDER};"
+                "border-radius: 12px;"
+                "padding: 9px 12px;"
+                "font-size: 12px;"
+                "font-weight: 700;"
+                "text-align: left;"
+                "}"
+                "QPushButton:hover {"
+                "background: rgba(56, 189, 248, 0.09);"
+                "border: 1px solid rgba(56, 189, 248, 0.26);"
+                "}"
+            )
+            btn.clicked.connect(lambda checked=False, text=prompt: self._submit_text(text, clear_input=False))
+            prompts.addWidget(btn)
+        v.addLayout(prompts)
 
         hint = QLabel(_t("input_shortcut_hint"))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3085,6 +3488,10 @@ QListWidget::item:selected {{
             elif health == "pass":
                 trace.set_state(_t("trustworthy"), kind="done")
             return
+        if event_type == "agent_plan":
+            plan = event.get("plan") if isinstance(event.get("plan"), list) else []
+            trace.set_plan([item for item in plan if isinstance(item, dict)])
+            return
         if event_type == "agent_status":
             status_text = str(event.get("status") or "").strip()
             if status_text:
@@ -3330,13 +3737,13 @@ QListWidget::item:selected {{
         dialog = QDialog(self)
         dialog.setWindowTitle(_t("run_debug_title"))
         dialog.resize(760, 620)
-        dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
+        dialog.setStyleSheet(_dialog_style())
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
 
         title = QLabel(_tf("run_log_label", name=Path(run_log_path).name))
-        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 800;")
         layout.addWidget(title)
 
         view = QTextBrowser()
@@ -3390,21 +3797,18 @@ QListWidget::item:selected {{
         dialog = QDialog(self)
         dialog.setWindowTitle(_t("current_diff_review"))
         dialog.resize(840, 660)
-        dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
+        dialog.setStyleSheet(_dialog_style())
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
 
         title = QLabel(_t("current_diff_review"))
-        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 800;")
         layout.addWidget(title)
 
         view = QTextBrowser()
         view.setOpenExternalLinks(False)
-        view.setStyleSheet(
-            f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
-            f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 10px;"
-        )
+        view.setStyleSheet(_text_view_style())
         view.setHtml(render(markdown))
         layout.addWidget(view, 1)
 
@@ -3421,17 +3825,9 @@ QListWidget::item:selected {{
 
     def _sync_send_button_style(self):
         if self._is_busy():
-            self.send_btn.setStyleSheet(
-                "background: rgba(148, 163, 184, 0.18); color: #64748B; "
-                "border: none; border-radius: 14px; padding: 8px 18px; "
-                "font-size: 13px; font-weight: 800;"
-            )
+            self.send_btn.setStyleSheet(_button_style("primary", radius=14))
         else:
-            self.send_btn.setStyleSheet(
-                f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {C_ACCENT}, stop:1 {C_ACCENT_2}); "
-                "color: #03111A; border: none; border-radius: 14px; padding: 8px 18px; "
-                "font-size: 13px; font-weight: 800;"
-            )
+            self.send_btn.setStyleSheet(_button_style("primary", radius=14))
 
     def _sync_stop_button_style(self):
         if self._is_busy():
@@ -3443,18 +3839,10 @@ QListWidget::item:selected {{
                 )
                 self.stop_btn.setText(_t("stopping"))
             else:
-                self.stop_btn.setStyleSheet(
-                    "background: rgba(239, 68, 68, 0.14); color: #FCA5A5; "
-                    "border: 1px solid rgba(248, 113, 113, 0.28); border-radius: 14px; "
-                    "padding: 8px 18px; font-size: 13px; font-weight: 800;"
-                )
+                self.stop_btn.setStyleSheet(_button_style("danger", radius=14))
                 self.stop_btn.setText(_t("stop"))
         else:
-            self.stop_btn.setStyleSheet(
-                "background: rgba(255, 255, 255, 0.04); color: #64748B; "
-                f"border: 1px solid {C_BORDER}; border-radius: 14px; "
-                "padding: 8px 18px; font-size: 13px; font-weight: 800;"
-            )
+            self.stop_btn.setStyleSheet(_button_style("secondary", radius=14))
             self.stop_btn.setText(_t("stop"))
 
     def _sync_mode_button_style(self):
@@ -3494,8 +3882,7 @@ QListWidget::item:selected {{
         self._sync_workspace_mode_chip()
 
     def _legacy_update_status(self):
-        count = len(db.get_messages(self.current_session)) if self.current_session else 0
-        self.status_count.setText(f"{count} {_t('messages')}")
+        self.status_count.setText(self._permission_summary())
 
     # ==================== Send Flow ====================
 
@@ -3754,8 +4141,7 @@ QListWidget::item:selected {{
 
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(
-            f"{MODEL} | {self._workspace_header_label()} | "
-            f"{count} {_t('messages')} | {self._activity_label()}"
+            f"{MODEL} | {self._workspace_header_label()} | {self._activity_label()}"
         )
         if hasattr(self, "workspace_btn"):
             self.workspace_btn.setText(_workspace_button_label(self._current_workspace_root()))
@@ -3767,8 +4153,7 @@ QListWidget::item:selected {{
         self._sync_workspace_mode_chip()
 
     def _update_status(self):
-        count = len(db.get_messages(self.current_session)) if self.current_session else 0
-        self.status_count.setText(f"{count} {_t('messages')}")
+        self.status_count.setText(self._permission_summary())
 
     def _stopped_message_for_worker(self, worker: AgentWorker | None) -> str:
         return _t("stopped")
