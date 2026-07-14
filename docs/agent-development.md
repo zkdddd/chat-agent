@@ -1,5 +1,19 @@
 # Agent Development Log
 
+## 2026-07-14: Resume Run History Picker Merge
+
+### What changed
+
+- Pulled remote UI navigation updates from GitHub and kept the local resume-history picker work.
+- The `Resume` action lists recent runs that need attention: stopped, failed, warn/fail health, unverified changes, validation failures, or failed tools.
+- Selecting a run builds a `task_resume` context and previews it before submitting the generated resume prompt as the next Agent turn.
+
+### Verification
+
+```text
+147 passed
+```
+
 ## 2026-07-13: Command Palette, Recent Workspaces, And Plan UI
 
 ### What changed

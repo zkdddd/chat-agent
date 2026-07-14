@@ -1,6 +1,9 @@
 from kagent.agent.run_log import RunLogger
 from kagent.ui.main_window import (
     _diff_review_markdown,
+    _resume_history_candidates,
+    _resume_history_item_label,
+    _resume_history_markdown,
     _resume_task_prompt,
     _run_debug_markdown,
     _plan_steps_summary,
@@ -89,6 +92,66 @@ def test_resume_task_prompt_wraps_context_for_agent(monkeypatch):
     assert "run_id: run-1" in prompt
     assert "priority: continue_incomplete_plan" in prompt
     assert "Continue from the next unfinished plan step." in prompt
+
+
+def test_resume_history_candidates_filter_problem_runs_by_workspace(tmp_path):
+    rows = [
+        {
+            "run_id": "pass-run",
+            "status": "completed",
+            "health": "pass",
+            "workspace_root": str(tmp_path),
+            "failed_tool_count": 0,
+        },
+        {
+            "run_id": "validation-run",
+            "status": "completed",
+            "health": "fail",
+            "workspace_root": str(tmp_path),
+            "validation_failed": True,
+            "failed_tool_count": 0,
+        },
+        {
+            "run_id": "other-workspace-run",
+            "status": "stopped",
+            "health": "fail",
+            "workspace_root": str(tmp_path / "other"),
+            "failed_tool_count": 0,
+        },
+    ]
+
+    candidates = _resume_history_candidates(rows, workspace_root=str(tmp_path))
+
+    assert [item["run_id"] for item in candidates] == ["validation-run"]
+
+
+def test_resume_history_item_label_and_markdown(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+    label = _resume_history_item_label(
+        {
+            "run_id": "abcdef123456",
+            "started_at": "2026-07-13T10:00:00Z",
+            "status": "completed",
+            "health": "fail",
+            "validation_failed": True,
+            "failed_tool_count": 2,
+        }
+    )
+    markdown = _resume_history_markdown(
+        {
+            "run_id": "abcdef123456",
+            "status": "completed",
+            "health": "fail",
+            "priority": "fix_validation_failure",
+            "resume_prompt": "Fix validation first.",
+        }
+    )
+
+    assert "validation_failed" in label
+    assert "failed_tools:2" in label
+    assert "abcdef1234" in label
+    assert "Resume Preview" in markdown
+    assert "fix_validation_failure" in markdown
 
 
 def test_ui_markdown_uses_english_language(tmp_path, monkeypatch):

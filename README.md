@@ -4,6 +4,7 @@
 
 - Run Debug now includes a `Resume Task` action.
 - The action builds resume context from the selected run log and submits it to the Agent as the next turn.
+- The chat header now includes a resume-history picker for recent failed, stopped, unverified, or validation-failed runs.
 - Windows launch scripts prefer the project `.venv` instead of a hardcoded local Python path.
 - UI option labels, dialogs, tool cards, rollback actions, diff review, and task resume text now follow the selected app language.
 - Each chat session can now target its own workspace/project directory from the UI.
@@ -61,6 +62,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - Agent 支持运行自检报告，可以基于日志判断本次运行是否可信，并标记未完成、未验证变更、验证失败、失败工具和循环风险。
 - Agent 支持最终回复可信度接入，最终回答会根据自检结果明确提示未验证变更、验证失败、失败工具或循环风险。
 - UI 支持运行调试入口，可以在 Agent 执行日志卡片中查看本次运行日志摘要、自检结果和事件时间线。
+- UI 支持恢复运行历史选择器，可以列出最近需要关注的运行并预览恢复上下文后继续任务。
 - UI 支持当前会话 Diff Review，可以直接查看本轮 active rollback 记录汇总出的文件列表和 diff 预览。
 - Agent 会压缩喂给模型的工具输出，避免大文件、大目录和长命令输出撑爆上下文。
 - Agent 支持长期项目记忆，会按工作区保存项目结构摘要、入口文件、配置文件、常用验证命令和稳定偏好，下次运行自动注入上下文。

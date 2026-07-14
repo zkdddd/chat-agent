@@ -39,6 +39,7 @@ from .. import config as app_config
 from .. import db
 from ..agent import WorkspaceTools
 from ..agent.project_map import build_project_map, summarize_project_map
+from ..agent.run_history import list_run_history
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_self_check import format_run_health_report
 from ..agent.task_resume import build_latest_resume_context, build_resume_context, format_resume_context
@@ -107,6 +108,7 @@ UI_TEXT = {
         "restore": "恢复",
         "history": "历史",
         "diff_review": "差异",
+        "resume_history": "恢复历史",
         "workspace": "工作区",
         "switch_workspace": "切换工作区",
         "select_workspace": "选择工作区",
@@ -188,6 +190,10 @@ UI_TEXT = {
         "empty": "空",
         "no_active_rollbackable_changes": "当前会话没有可回滚的活跃变更。",
         "resume_task": "恢复任务",
+        "resume_history_title": "恢复运行历史",
+        "resume_selected": "恢复选中运行",
+        "resume_preview": "恢复预览",
+        "no_resume_history": "暂无需要恢复的运行记录。",
         "resume_prompt_intro": "根据下面的恢复上下文继续上一次 Agent 任务。",
         "resume_prompt_no_restart": "除非上下文明显不可用，否则不要从头开始。",
         "resume_prompt_verify_first": "先核对当前工作区状态，然后继续最高优先级的下一步。",
@@ -312,6 +318,7 @@ UI_TEXT = {
         "restore": "Restore",
         "history": "History",
         "diff_review": "Diff",
+        "resume_history": "Resume",
         "workspace": "Workspace",
         "switch_workspace": "Switch workspace",
         "select_workspace": "Select workspace",
@@ -393,6 +400,10 @@ UI_TEXT = {
         "empty": "empty",
         "no_active_rollbackable_changes": "No active rollbackable changes in this session.",
         "resume_task": "Resume Task",
+        "resume_history_title": "Resume Run History",
+        "resume_selected": "Resume selected run",
+        "resume_preview": "Resume Preview",
+        "no_resume_history": "No runs need resume.",
         "resume_prompt_intro": "Continue the previous Agent task using this resume context.",
         "resume_prompt_no_restart": "Do not restart from scratch unless the context is clearly unusable.",
         "resume_prompt_verify_first": "First verify the current workspace state, then continue with the highest-priority next step.",
@@ -895,6 +906,60 @@ def _resume_task_prompt(context: dict[str, Any]) -> str:
             "```text",
             format_resume_context(context),
             "```",
+        ]
+    )
+
+
+def _resume_history_candidates(
+    rows: list[dict[str, Any]],
+    *,
+    workspace_root: str | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    workspace = str(workspace_root or "").strip()
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if workspace and str(row.get("workspace_root") or "") != workspace:
+            continue
+        status = str(row.get("status") or "")
+        health = str(row.get("health") or "")
+        if (
+            status != "completed"
+            or health in {"fail", "warn"}
+            or bool(row.get("validation_failed"))
+            or bool(row.get("unverified"))
+            or int(row.get("failed_tool_count") or 0) > 0
+        ):
+            candidates.append(row)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _resume_history_item_label(row: dict[str, Any]) -> str:
+    started = str(row.get("started_at") or "unknown")
+    run_id = str(row.get("run_id") or "unknown")
+    status = str(row.get("status") or "running")
+    health = str(row.get("health") or "unknown")
+    priority_bits: list[str] = []
+    if row.get("validation_failed"):
+        priority_bits.append("validation_failed")
+    if row.get("unverified"):
+        priority_bits.append("unverified")
+    failed_count = int(row.get("failed_tool_count") or 0)
+    if failed_count:
+        priority_bits.append(f"failed_tools:{failed_count}")
+    if status != "completed":
+        priority_bits.append(status)
+    detail = ", ".join(priority_bits) if priority_bits else health
+    return f"{started} | {status}/{health} | {detail} | {run_id[:10]}"
+
+
+def _resume_history_markdown(context: dict[str, Any]) -> str:
+    return "\n\n".join(
+        [
+            f"### {_t('resume_preview')}",
+            f"```text\n{format_resume_context(context)}\n```",
         ]
     )
 
@@ -2534,6 +2599,16 @@ QListWidget::item:selected {{
         self.diff_review_btn.setStyleSheet(_button_style("secondary", compact=True))
         h.addWidget(self.diff_review_btn)
 
+        self.resume_history_btn = QPushButton(_t("resume_history"))
+        self.resume_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.resume_history_btn.clicked.connect(self._show_resume_history_picker)
+        self.resume_history_btn.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.025); color: #94A3B8; "
+            f"border: 1px solid {C_BORDER}; border-radius: 12px; "
+            "padding: 7px 11px; font-size: 12px; font-weight: 700;"
+        )
+        h.addWidget(self.resume_history_btn)
+
         self.rollback_history_btn = QPushButton(_t("history"))
         self.rollback_history_btn.setCheckable(True)
         self.rollback_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2711,6 +2786,8 @@ QListWidget::item:selected {{
             self.rollback_history_btn.setText(_t("history"))
         if hasattr(self, "diff_review_btn"):
             self.diff_review_btn.setText(_t("diff_review"))
+        if hasattr(self, "resume_history_btn"):
+            self.resume_history_btn.setText(_t("resume_history"))
         if hasattr(self, "rollback_refresh_btn"):
             self.rollback_refresh_btn.setText(_t("refresh"))
         if hasattr(self, "rollback_history_title_label"):
@@ -3781,6 +3858,107 @@ QListWidget::item:selected {{
         if dialog is not None:
             dialog.accept()
         self._submit_text(prompt, clear_input=False)
+
+    def _show_resume_history_picker(self) -> None:
+        if self._is_busy():
+            QMessageBox.information(self, "kagent", _t("busy_action_message"))
+            return
+        try:
+            rows = list_run_history(limit=80)
+            candidates = _resume_history_candidates(
+                rows,
+                workspace_root=self._current_workspace_root(),
+                limit=30,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", _tf("build_resume_context_failed", error=exc))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(_t("resume_history_title"))
+        dialog.resize(980, 660)
+        dialog.setStyleSheet(f"background: {C_BG_PANEL}; color: {C_TEXT_MAIN};")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(_t("resume_history_title"))
+        title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-weight: 800;")
+        layout.addWidget(title)
+
+        body = QHBoxLayout()
+        body.setSpacing(10)
+
+        run_list = QListWidget()
+        run_list.setStyleSheet(
+            f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+            f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 6px;"
+        )
+        body.addWidget(run_list, 1)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setStyleSheet(
+            f"background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+            f"border: 1px solid {C_BORDER}; border-radius: 14px; padding: 10px;"
+        )
+        body.addWidget(view, 2)
+        layout.addLayout(body, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        resume_button = buttons.addButton(
+            _t("resume_selected"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        resume_button.setEnabled(False)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        contexts: dict[str, dict[str, Any]] = {}
+
+        def show_selected(item: QListWidgetItem | None) -> None:
+            if item is None:
+                resume_button.setEnabled(False)
+                return
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            if not path:
+                resume_button.setEnabled(False)
+                return
+            try:
+                context = contexts.get(path)
+                if context is None:
+                    context = build_resume_context(path)
+                    contexts[path] = context
+                view.setHtml(render(_resume_history_markdown(context)))
+                resume_button.setEnabled(True)
+            except Exception as exc:
+                view.setHtml(render(f"{_tf('build_resume_context_failed', error=exc)}"))
+                resume_button.setEnabled(False)
+
+        def resume_selected() -> None:
+            item = run_list.currentItem()
+            if item is None:
+                return
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            context = contexts.get(path)
+            if context is None:
+                context = build_resume_context(path)
+            dialog.accept()
+            self._submit_text(_resume_task_prompt(context), clear_input=False)
+
+        resume_button.clicked.connect(resume_selected)
+        run_list.currentItemChanged.connect(lambda current, _previous: show_selected(current))
+
+        if candidates:
+            for row in candidates:
+                item = QListWidgetItem(_resume_history_item_label(row))
+                item.setData(Qt.ItemDataRole.UserRole, str(row.get("path") or ""))
+                item.setToolTip(str(row.get("path") or ""))
+                run_list.addItem(item)
+            run_list.setCurrentRow(0)
+        else:
+            view.setHtml(render(f"### {_t('resume_history_title')}\n\n{_t('no_resume_history')}"))
+
+        dialog.exec()
 
     def _show_current_diff_review(self) -> None:
         workspace = self._workspace_tools_for_session()
