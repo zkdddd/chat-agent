@@ -1,5 +1,6 @@
 from kagent.agent.run_log import RunLogger
 from kagent.ui.main_window import (
+    _activity_recent_path_lines,
     _activity_recent_resume_lines,
     _activity_status_summary,
     _diff_review_markdown,
@@ -195,6 +196,7 @@ def test_activity_entry_tooltips_distinguish_diff_resume_and_history(monkeypatch
 
     assert _t("activity") == "Activity"
     assert _t("activity_title") == "Activity Panel"
+    assert _t("activity_back") == "Back"
     assert "one place" in _t("activity_tip")
     assert "together" in _t("activity_intro")
     assert "current session" in _t("diff_review_tip")
@@ -204,6 +206,7 @@ def test_activity_entry_tooltips_distinguish_diff_resume_and_history(monkeypatch
     monkeypatch.setattr("kagent.config.APP_LANGUAGE", "zh")
     assert _t("activity")
     assert _t("activity_title")
+    assert _t("activity_back")
     assert _t("activity_tip")
     assert _t("activity_intro")
     assert _t("diff_review_tip")
@@ -252,6 +255,22 @@ def test_activity_recent_resume_lines_show_recent_problem_runs(monkeypatch):
     assert "failed_tools:1" in lines[0]
     assert "run-111111" in lines[0]
     assert _activity_recent_resume_lines([]) == ["No recent runs need resume."]
+
+
+def test_activity_recent_path_lines_limits_changed_paths(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    lines = _activity_recent_path_lines(
+        ["kagent/ui/main_window.py", "tests/test_ui_run_debug.py", "README.md", "docs/log.md"],
+        limit=2,
+    )
+
+    assert lines == [
+        "`kagent/ui/main_window.py`",
+        "`tests/test_ui_run_debug.py`",
+        "+2 more",
+    ]
+    assert _activity_recent_path_lines([]) == ["No changed paths to show."]
 
 
 def test_ui_markdown_uses_english_language(tmp_path, monkeypatch):

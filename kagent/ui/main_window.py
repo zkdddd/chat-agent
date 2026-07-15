@@ -117,12 +117,15 @@ UI_TEXT = {
         "activity_title": "活动面板",
         "activity_tip": "集中查看当前差异、恢复历史任务和 rollback 历史。",
         "activity_intro": "把代码审查、任务恢复和版本回滚入口集中在一个地方，避免顶部出现重复按钮。",
+        "activity_back": "返回",
         "activity_open_diff": "查看当前差异",
         "activity_open_resume": "恢复历史任务",
         "activity_open_history": "打开回滚历史",
         "activity_status_unavailable": "状态不可用",
         "activity_diff_clean": "当前没有可回滚改动",
         "activity_diff_count": "{count} 个当前改动文件",
+        "activity_diff_recent_empty": "当前没有可展示的改动文件。",
+        "activity_more_items": "+{count} more",
         "activity_resume_clean": "没有需要恢复的运行",
         "activity_resume_count": "{count} 个运行需要关注",
         "activity_resume_recent_empty": "最近没有需要恢复的运行。",
@@ -348,12 +351,15 @@ UI_TEXT = {
         "activity_title": "Activity Panel",
         "activity_tip": "Open current diffs, resumable runs, and rollback history from one place.",
         "activity_intro": "Review, resume, and rollback actions live together here so the header does not duplicate recovery entry points.",
+        "activity_back": "Back",
         "activity_open_diff": "Review current diff",
         "activity_open_resume": "Resume previous run",
         "activity_open_history": "Open rollback history",
         "activity_status_unavailable": "Status unavailable",
         "activity_diff_clean": "No rollbackable changes",
         "activity_diff_count": "{count} changed path(s)",
+        "activity_diff_recent_empty": "No changed paths to show.",
+        "activity_more_items": "+{count} more",
         "activity_resume_clean": "No runs need resume",
         "activity_resume_count": "{count} run(s) need attention",
         "activity_resume_recent_empty": "No recent runs need resume.",
@@ -1042,6 +1048,18 @@ def _activity_recent_resume_lines(rows: list[dict[str, Any]], limit: int = 3) ->
     if not selected:
         return [_t("activity_resume_recent_empty")]
     return [_resume_history_item_label(row) for row in selected]
+
+
+def _activity_recent_path_lines(paths: list[str], limit: int = 3) -> list[str]:
+    clean_paths = [str(path) for path in paths if str(path).strip()]
+    if not clean_paths:
+        return [_t("activity_diff_recent_empty")]
+    safe_limit = max(0, int(limit))
+    lines = [f"`{path}`" for path in clean_paths[:safe_limit]]
+    remaining = len(clean_paths) - safe_limit
+    if remaining > 0:
+        lines.append(_tf("activity_more_items", count=remaining))
+    return lines
 
 
 def _session_title_for_workspace(path: str | Path) -> str:
@@ -4104,12 +4122,16 @@ QListWidget::item:selected {{
 
         workspace = self._workspace_tools_for_session()
         diff_count: int | None = None
+        diff_paths: list[str] | None = None
         rollback_count: int | None = None
         if workspace is not None:
             try:
                 diff_preview = workspace.preview_rollback_session(limit=80)
-                diff_count = int(diff_preview.get("path_count") or len(diff_preview.get("paths") or []))
+                raw_paths = diff_preview.get("paths") if isinstance(diff_preview.get("paths"), list) else []
+                diff_paths = [str(path) for path in raw_paths]
+                diff_count = int(diff_preview.get("path_count") or len(diff_paths))
             except Exception:
+                diff_paths = None
                 diff_count = None
             try:
                 rollback_history = workspace.list_rollback_history(limit=40, include_inactive=True)
@@ -4188,6 +4210,7 @@ QListWidget::item:selected {{
             _activity_status_summary("diff", count=diff_count, unavailable=workspace is None),
             "diff_review_tip",
             self._show_current_diff_review,
+            _activity_recent_path_lines(diff_paths or []) if diff_paths is not None else None,
         )
         add_activity_row(
             "activity_open_resume",
@@ -4205,9 +4228,16 @@ QListWidget::item:selected {{
 
         layout.addStretch(1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addStretch(1)
+
+        back_button = QPushButton(_t("activity_back"))
+        back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_button.setStyleSheet(_button_style("secondary", compact=True))
+        back_button.clicked.connect(dialog.reject)
+        footer.addWidget(back_button)
+        layout.addLayout(footer)
 
         dialog.exec()
 

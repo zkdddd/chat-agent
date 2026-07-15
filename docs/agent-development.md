@@ -1,5 +1,52 @@
 # Agent Development Log
 
+## 2026-07-15: Activity Panel Back Button
+
+### What changed
+
+- Replaced the default Activity dialog close control with an explicit `Back` button.
+- Added localized Activity back-button text.
+- The button closes the Activity panel and returns the user to the main chat view.
+
+### Why
+
+Activity is becoming a real panel instead of a throwaway dialog. A clear back action makes the navigation model easier to understand before adding deeper in-panel pages.
+
+### Verification
+
+```text
+23 targeted tests passed
+```
+
+Full validation:
+```text
+153 passed
+```
+
+## 2026-07-15: Activity Current Diff Paths
+
+### What changed
+
+- Activity panel now shows recent current-diff paths under the diff summary.
+- The path list reuses `preview_rollback_session` data from the existing rollback preview backend.
+- Long path lists are capped and show a `+N more` overflow line.
+- Empty diff state now has a direct inline message.
+
+### Why
+
+Activity already showed how many current paths changed. Showing the first few paths makes it usable as a quick change dashboard without forcing users to open the full diff review dialog first.
+
+### Verification
+
+```text
+23 targeted tests passed
+```
+
+Full validation:
+```text
+153 passed
+```
+
 ## 2026-07-15: Activity Recent Resume Runs
 
 ### What changed

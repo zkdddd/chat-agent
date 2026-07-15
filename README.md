@@ -11,6 +11,8 @@
 - The chat header now uses one `Activity` entry that opens a shared panel for current diff review, resumable runs, and rollback history.
 - The Activity panel now shows status summaries for current changed paths, resumable runs, and rollback records before opening details.
 - The Activity panel now lists the most recent resumable runs directly under the resume summary.
+- The Activity panel now lists recent current-diff paths directly under the diff summary.
+- The Activity panel now has an explicit `Back` button for returning to the main chat view.
 - Windows launch scripts prefer the project `.venv` instead of a hardcoded local Python path.
 - UI option labels, dialogs, tool cards, rollback actions, diff review, and task resume text now follow the selected app language.
 - Each chat session can now target its own workspace/project directory from the UI.
@@ -76,6 +78,8 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - UI 已把 Diff、Resume、History 收敛到统一 Activity 面板入口，顶部不再展示三个并列恢复类按钮。
 - UI 的 Activity 面板会直接展示当前差异文件数、需要恢复的运行数和 rollback 记录数，让入口从按钮集合升级为状态面板。
 - UI 的 Activity 面板会在恢复任务区直接列出最近需要恢复的运行，方便先判断是哪次任务需要继续。
+- UI 的 Activity 面板会在当前差异区直接列出最近改动文件，超过限制时显示剩余数量。
+- UI 的 Activity 面板新增明确的返回按钮，关闭面板后回到主聊天界面。
 - Agent 会压缩喂给模型的工具输出，避免大文件、大目录和长命令输出撑爆上下文。
 - Agent 支持长期项目记忆，会按工作区保存项目结构摘要、入口文件、配置文件、常用验证命令和稳定偏好，下次运行自动注入上下文。
 - Agent 会给工具失败结果附带恢复建议，例如路径不存在、参数错误、缺依赖、命令超时、代码错误等。
