@@ -16,6 +16,7 @@
 - Activity child panels now include `Back to Activity` navigation for diff review, resume history, and rollback history.
 - Agent now has a read-only `suggest_self_improvements` tool that proposes small coding-agent improvement tasks from project structure and run history.
 - The chat input now supports slash commands: type `/` to open command suggestions, including `/self` for self-improvement suggestions.
+- Slash commands now include `/model ...` entries for switching the active chat and coding Agent model.
 - Windows launch scripts prefer the project `.venv` instead of a hardcoded local Python path.
 - UI option labels, dialogs, tool cards, rollback actions, diff review, and task resume text now follow the selected app language.
 - Each chat session can now target its own workspace/project directory from the UI.
@@ -86,6 +87,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - UI 的 Activity 子面板新增返回 Activity 导航，当前差异、恢复历史和 rollback 历史都可以回到活动面板。
 - Agent 支持只读自优化建议工具 `suggest_self_improvements`，会基于项目结构、测试映射、长文件、TODO 和历史运行状态生成低风险优化候选。
 - 聊天输入框支持 `/` 唤醒命令面板，可以用 `/self` 快速填入自优化建议提示。
+- 聊天输入框支持 `/model` 模型切换命令，当前已内置 GPT-5.5、GPT-5.4、GPT-5.4-Mini、GPT-5.3-Codex 和 GPT-5.2。
 - Agent 会压缩喂给模型的工具输出，避免大文件、大目录和长命令输出撑爆上下文。
 - Agent 支持长期项目记忆，会按工作区保存项目结构摘要、入口文件、配置文件、常用验证命令和稳定偏好，下次运行自动注入上下文。
 - Agent 会给工具失败结果附带恢复建议，例如路径不存在、参数错误、缺依赖、命令超时、代码错误等。
@@ -110,6 +112,19 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 ```
 
 这个工具只生成建议，不会自动修改文件。建议确认后，再让 Agent 选择其中一个小任务执行。
+
+模型切换：
+
+```text
+/model
+```
+
+当前内置模型：
+- `GPT-5.5` -> `gpt-5.5`，实测可用。
+- `GPT-5.4` -> `gpt-5.4`，实测可用。
+- `GPT-5.4-Mini` -> `gpt-5.4-mini`，实测可用。
+- `GPT-5.3-Codex` -> `gpt-5.3-codex`，实测可用。
+- `GPT-5.2` -> `gpt-5.2`，当前接口实测返回 400，不支持当前 ChatGPT/Codex 账户路径。
 
 运行内容：
 - Python 语法检查。

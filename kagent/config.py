@@ -10,6 +10,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 MODEL = os.getenv("MODEL", "gpt-5.4-mini")
+DEFAULT_MODEL_OPTIONS = "gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2"
+MODEL_OPTIONS = os.getenv("KAGENT_MODEL_OPTIONS", DEFAULT_MODEL_OPTIONS)
 APP_LANGUAGE = os.getenv("APP_LANGUAGE", "zh").strip().lower()
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "kagent.db"))
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", str(BASE_DIR.parent))
@@ -24,6 +26,20 @@ CONTEXT_MAX_TOKENS = int(os.getenv("KAGENT_CONTEXT_MAX_TOKENS", "24000"))
 CONTEXT_KEEP_RECENT_MESSAGES = int(os.getenv("KAGENT_CONTEXT_KEEP_RECENT_MESSAGES", "24"))
 CONTEXT_SUMMARY_MAX_CHARS = int(os.getenv("KAGENT_CONTEXT_SUMMARY_MAX_CHARS", "4000"))
 CONTEXT_PER_MESSAGE_MAX_CHARS = int(os.getenv("KAGENT_CONTEXT_PER_MESSAGE_MAX_CHARS", "12000"))
+
+
+def available_models() -> list[str]:
+    values = [item.strip() for item in str(MODEL_OPTIONS or "").split(",") if item.strip()]
+    if MODEL not in values:
+        values.insert(0, MODEL)
+    return list(dict.fromkeys(values))
+
+
+def model_display_name(model: str) -> str:
+    parts = str(model or "").strip().split("-")
+    if not parts:
+        return str(model or "")
+    return "-".join(part.upper() if idx == 0 else part.capitalize() for idx, part in enumerate(parts))
 
 SYSTEM_PROMPT = """你是 kagent，一个友好、专业的 AI 助手。
 

@@ -1,5 +1,60 @@
 # Agent Development Log
 
+## 2026-07-15: Two-Level Slash Model Menu
+
+### What changed
+
+- Slash command panel now shows five top-level commands at once.
+- `/model` opens a second-level model selection list instead of mixing all models into the top-level command list.
+- The slash command panel is taller and uses a scrollbar style consistent with the chat scroll area.
+
+### Why
+
+The model commands made the first slash menu crowded. A two-level menu keeps the main command list readable while still making all model choices accessible.
+
+### Verification
+
+```text
+28 targeted tests passed
+```
+
+Full validation:
+```text
+157 passed
+```
+
+## 2026-07-15: Slash Model Switcher
+
+### What changed
+
+- Added built-in model options for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, and `gpt-5.2`.
+- Slash commands now expose `/model ...` entries using display labels such as `GPT-5.5`.
+- Selecting a `/model` command switches the runtime model for both normal chat and coding Agent runs.
+- `AgentWorker`, normal chat streaming, title generation, and `CodeAgent` now receive the selected model.
+
+### Model availability check
+
+Using the current configured API endpoint:
+
+```text
+gpt-5.5: OK
+gpt-5.4: OK
+gpt-5.4-mini: OK
+gpt-5.3-codex: OK
+gpt-5.2: 400 unsupported for the current ChatGPT/Codex account path
+```
+
+### Verification
+
+```text
+28 targeted tests passed
+```
+
+Full validation:
+```text
+157 passed
+```
+
 ## 2026-07-15: Slash Command Compact Rows
 
 ### What changed

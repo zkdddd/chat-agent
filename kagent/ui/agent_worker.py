@@ -28,12 +28,14 @@ class AgentWorker(QThread):
         message: str,
         history: list[dict],
         workspace_root: str | None = None,
+        model: str | None = None,
     ):
         super().__init__()
         self.session_id = session_id
         self.message = message
         self.history = history
         self.workspace_root = workspace_root
+        self.model = model
         self._stop = False
         self._approval_lock = threading.Lock()
         self._approval_waiters: dict[str, dict[str, object]] = {}
@@ -52,7 +54,7 @@ class AgentWorker(QThread):
             return
 
         def _run() -> None:
-            title = llm.generate_title(self.message)
+            title = llm.generate_title(self.message, model=self.model)
             if not title:
                 return
             db.rename_session(self.session_id, title)
@@ -173,7 +175,7 @@ class AgentWorker(QThread):
 
             if not self.workspace_root:
                 chunks: list[str] = []
-                for chunk in llm.stream_chat(agent_history):
+                for chunk in llm.stream_chat(agent_history, model=self.model):
                     if self._stop:
                         break
                     chunks.append(chunk)
@@ -188,6 +190,7 @@ class AgentWorker(QThread):
                 confirm_tool=self._confirm_tool,
                 workspace_root=self.workspace_root,
                 session_id=self.session_id,
+                model=self.model or None,
             )
             report = agent.run(
                 agent_history,

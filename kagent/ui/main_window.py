@@ -44,7 +44,7 @@ from ..agent.run_history import list_run_history
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_self_check import format_run_health_report
 from ..agent.task_resume import build_latest_resume_context, build_resume_context, format_resume_context
-from ..config import MODEL
+from ..config import MODEL, available_models, model_display_name
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
 
@@ -186,6 +186,9 @@ UI_TEXT = {
         "slash_self_improve": "自优化建议",
         "slash_self_improve_desc": "扫描项目并提出代码能力优化建议",
         "slash_self_improve_prompt": "请调用 suggest_self_improvements，列出 5 个当前项目最值得做的代码能力优化建议。",
+        "slash_model": "切换模型",
+        "slash_model_desc": "切换当前聊天使用的模型",
+        "model_switched": "已切换模型：{model}",
         "slash_check_project": "检查项目",
         "slash_fix_tests": "修复测试",
         "slash_explain_project": "解释项目",
@@ -430,6 +433,9 @@ UI_TEXT = {
         "slash_self_improve": "Self-improve suggestions",
         "slash_self_improve_desc": "Scan the project and suggest coding-capability improvements",
         "slash_self_improve_prompt": "Call suggest_self_improvements and list the 5 most valuable coding-capability improvements for this project.",
+        "slash_model": "Switch model",
+        "slash_model_desc": "Switch the model used by this chat",
+        "model_switched": "Model switched: {model}",
         "slash_check_project": "Check project",
         "slash_fix_tests": "Fix tests",
         "slash_explain_project": "Explain project",
@@ -608,16 +614,46 @@ def _slash_commands() -> list[dict[str, str]]:
             "description": _t("prompt_explain_project_text"),
             "prompt": _t("prompt_explain_project_text"),
         },
+        {
+            "name": "/model",
+            "label": _t("slash_model"),
+            "description": _t("slash_model_desc"),
+            "prompt": "",
+            "action": "open_model_menu",
+        },
     ]
 
 
+def _slash_model_commands() -> list[dict[str, str]]:
+    commands: list[dict[str, str]] = []
+    for model in available_models():
+        display = model_display_name(model)
+        commands.append(
+            {
+                "name": f"/model {display}",
+                "label": _t("slash_model"),
+                "description": f"{_t('slash_model_desc')}: {display}",
+                "prompt": "",
+                "action": "set_model",
+                "model": model,
+            }
+        )
+    return commands
+
+
 def _slash_command_matches(text: str, limit: int = 8) -> list[dict[str, str]]:
-    raw = str(text or "").strip()
+    original = str(text or "")
+    raw = original.strip()
     if not raw.startswith("/"):
         return []
     query = raw[1:].strip().lower()
+    source = _slash_commands()
+    if query.startswith("model"):
+        model_query = query.removeprefix("model").strip()
+        source = _slash_model_commands() if model_query or original.rstrip("\n").endswith(" ") else _slash_commands()
+        query = model_query if model_query else "model"
     matches: list[dict[str, str]] = []
-    for command in _slash_commands():
+    for command in source:
         haystack = " ".join(
             [
                 command.get("name", ""),
@@ -2347,6 +2383,7 @@ class ChatWindow(QMainWindow):
         self._rollback_history_items: list[dict[str, Any]] = []
         self._selected_rollback_id: int | None = None
         self._render_seq = 0
+        self._selected_model = MODEL
 
         root = QWidget()
         root.setObjectName("root")
@@ -2757,12 +2794,12 @@ QListWidget::item:selected {{
         self.chat_title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
         self.chat_title_label.setStyleSheet(f"color: {C_TEXT_MAIN};")
 
-        self.chat_subtitle_label = QLabel(f"{MODEL} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}")
+        self.chat_subtitle_label = QLabel(f"{self._selected_model} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}")
         self.chat_subtitle_label.setFont(QFont("Microsoft YaHei", 8))
         self.chat_subtitle_label.setStyleSheet(f"color: {C_TEXT_SUB};")
 
         self.chat_subtitle_label.setText(
-            f"{MODEL} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}"
+            f"{self._selected_model} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}"
         )
 
         title_stack.addWidget(self.chat_title_label)
@@ -2779,7 +2816,7 @@ QListWidget::item:selected {{
 
         self._sync_rollback_history_button_style()
 
-        self.chat_model_chip = _chip_label(MODEL, "#BAE6FD", "rgba(56, 189, 248, 0.12)", "rgba(56, 189, 248, 0.28)")
+        self.chat_model_chip = _chip_label(self._selected_model, "#BAE6FD", "rgba(56, 189, 248, 0.12)", "rgba(56, 189, 248, 0.28)")
         self.chat_mode_chip = _chip_label("Chat", "#CCFBF1", "rgba(20, 184, 166, 0.12)", "rgba(20, 184, 166, 0.28)")
         self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
@@ -2815,7 +2852,7 @@ QListWidget::item:selected {{
 
         self.slash_command_list = QListWidget()
         self.slash_command_list.setVisible(False)
-        self.slash_command_list.setMaximumHeight(128)
+        self.slash_command_list.setMaximumHeight(178)
         self.slash_command_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.slash_command_list.setStyleSheet(
             f"""
@@ -2838,6 +2875,25 @@ QListWidget::item:hover {{
 QListWidget::item:selected {{
     background: rgba(56, 189, 248, 0.18);
     color: #E0F2FE;
+}}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 8px 4px 8px 0;
+}}
+QScrollBar::handle:vertical {{
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 5px;
+    min-height: 28px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: rgba(148, 163, 184, 0.44);
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    height: 0;
+}}
+QScrollBar::add-page, QScrollBar::sub-page {{
+    background: transparent;
 }}
 """.strip()
         )
@@ -2913,7 +2969,7 @@ QListWidget::item:selected {{
         h = QHBoxLayout(bar)
         h.setContentsMargins(16, 0, 16, 0)
 
-        self.status_model = _chip_label(MODEL, "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
+        self.status_model = _chip_label(self._selected_model, "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
         self.status_model.setVisible(False)
         h.addWidget(self.status_model)
         h.addStretch(1)
@@ -3047,15 +3103,33 @@ QListWidget::item:selected {{
 
     def _sync_slash_command_layout(self, visible: bool) -> None:
         if hasattr(self, "input_bar"):
-            self.input_bar.setFixedHeight(238 if visible else 118)
+            self.input_bar.setFixedHeight(288 if visible else 118)
         if hasattr(self, "input_wrap"):
-            self.input_wrap.setMinimumHeight(202 if visible else 0)
+            self.input_wrap.setMinimumHeight(252 if visible else 0)
 
     def _apply_slash_command_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
             return
         command = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(command, dict):
+            return
+        if command.get("action") == "open_model_menu":
+            self.input.blockSignals(True)
+            self.input.setPlainText("/model ")
+            self.input.blockSignals(False)
+            self._refresh_slash_commands()
+            self.input.setFocus()
+            cursor = self.input.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.input.setTextCursor(cursor)
+            return
+        if command.get("action") == "set_model":
+            model = str(command.get("model") or "").strip()
+            if model:
+                self._set_selected_model(model)
+                self.input.clear()
+                self.slash_command_list.setVisible(False)
+                self._sync_slash_command_layout(False)
             return
         prompt = str(command.get("prompt") or "").strip()
         if not prompt:
@@ -3069,6 +3143,18 @@ QListWidget::item:selected {{
         cursor = self.input.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.input.setTextCursor(cursor)
+
+    def _set_selected_model(self, model: str) -> None:
+        self._selected_model = str(model).strip() or MODEL
+        if hasattr(self, "chat_model_chip"):
+            self.chat_model_chip.setText(self._selected_model)
+        if hasattr(self, "status_model"):
+            self.status_model.setText(self._selected_model)
+        self._refresh_chat_header()
+        self._update_status()
+        if hasattr(self, "input_hint_label"):
+            self.input_hint_label.setText(_tf("model_switched", model=self._selected_model))
+            QTimer.singleShot(2200, lambda: self.input_hint_label.setText(_t("input_shortcut_hint")))
 
     def _handle_input_slash_key(self, text: str, event: QEvent) -> bool:
         if not hasattr(self, "slash_command_list") or not self.slash_command_list.isVisible():
@@ -4547,7 +4633,7 @@ QListWidget::item:selected {{
         count = len(db.get_messages(self.current_session)) if self.current_session else 0
 
         self.chat_title_label.setText(title)
-        self.chat_subtitle_label.setText(f"{MODEL} ? Workspace ? {count} ??? ? {self._activity}")
+        self.chat_subtitle_label.setText(f"{self._selected_model} ? Workspace ? {count} ??? ? {self._activity}")
         self.chat_mode_chip.setText(_t("workspace"))
         self._sync_workspace_mode_chip()
 
@@ -4712,6 +4798,7 @@ QListWidget::item:selected {{
             normalized,
             history,
             workspace_root=self._current_workspace_root(),
+            model=self._selected_model,
         )
         self.worker = worker
         self._attach_worker_signals(worker)
@@ -4814,7 +4901,7 @@ QListWidget::item:selected {{
 
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(
-            f"{MODEL} | {self._workspace_header_label()} | {self._activity_label()}"
+            f"{self._selected_model} | {self._workspace_header_label()} | {self._activity_label()}"
         )
         if hasattr(self, "workspace_btn"):
             self.workspace_btn.setText(_workspace_button_label(self._current_workspace_root()))

@@ -28,6 +28,7 @@ AGENT_REQUEST_TIMEOUT_SECONDS = float(
 
 def open_chat_stream(
     messages: list[dict],
+    model: str | None = None,
     timeout: float | None = STREAM_REQUEST_TIMEOUT_SECONDS,
 ) -> Stream:
     full = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
@@ -39,7 +40,7 @@ def open_chat_stream(
         per_message_max_chars=CONTEXT_PER_MESSAGE_MAX_CHARS,
     )
     return client.chat.completions.create(
-        model=MODEL,
+        model=model or MODEL,
         messages=full,
         stream=True,
         temperature=0.7,
@@ -47,12 +48,12 @@ def open_chat_stream(
     )
 
 
-def stream_chat(messages: list[dict]) -> Iterator[str]:
+def stream_chat(messages: list[dict], model: str | None = None) -> Iterator[str]:
     """同步流式调用 OpenAI Chat Completions，逐段 yield 文本。
 
     供 QThread worker 调用：阻塞迭代，UI 线程通过 signal 接收 chunk。
     """
-    stream = open_chat_stream(messages)
+    stream = open_chat_stream(messages, model=model)
     try:
         for chunk in stream:
             if not chunk.choices:
@@ -66,12 +67,13 @@ def stream_chat(messages: list[dict]) -> Iterator[str]:
 
 def generate_title(
     first_user_msg: str,
+    model: str | None = None,
     timeout: float | None = TITLE_REQUEST_TIMEOUT_SECONDS,
 ) -> str:
     """根据首条用户消息生成会话标题（4-12 字）。"""
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=model or MODEL,
             messages=[
                 {
                     "role": "system",

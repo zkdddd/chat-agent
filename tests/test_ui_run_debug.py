@@ -289,6 +289,26 @@ def test_slash_commands_include_self_improvement_prompt(monkeypatch):
     assert _slash_command_matches("self") == []
 
 
+def test_slash_commands_include_model_switches(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    top_level = _slash_command_matches("/")
+    model_entry = _slash_command_matches("/model")
+    model_matches = _slash_command_matches("/model ")
+    model_values = [command.get("model") for command in model_matches]
+    labels = [command.get("name") for command in model_matches]
+
+    assert [command["name"] for command in top_level] == ["/self", "/check", "/test", "/explain", "/model"]
+    assert model_entry[0]["action"] == "open_model_menu"
+    assert "gpt-5.5" in model_values
+    assert "gpt-5.4" in model_values
+    assert "gpt-5.4-mini" in model_values
+    assert "gpt-5.3-codex" in model_values
+    assert "gpt-5.2" in model_values
+    assert "/model GPT-5.5" in labels
+    assert all(command.get("action") == "set_model" for command in model_matches)
+
+
 def test_ui_markdown_uses_english_language(tmp_path, monkeypatch):
     monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
     monkeypatch.setattr("kagent.agent.run_log.STATE_DIR", str(tmp_path))
