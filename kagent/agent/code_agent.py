@@ -144,6 +144,7 @@ class CodeAgent:
         "list_files",
         "search_file",
         "find_symbol",
+        "suggest_self_improvements",
         "read_file",
         "list_rollback_history",
         "preview_rollback_change",
@@ -1043,6 +1044,10 @@ class CodeAgent:
                     limit=int(args.get("limit", 50)),
                 ),
             }
+        if name == "suggest_self_improvements":
+            return self.workspace.suggest_self_improvements(
+                limit=int(args.get("limit", 5)),
+            )
         if name == "read_file":
             return self.workspace.read_file(
                 path=str(args["path"]),

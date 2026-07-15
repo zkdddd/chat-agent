@@ -20,6 +20,7 @@ from ..config import (
     ROLLBACK_ROOT,
     WORKSPACE_ROOT,
 )
+from .self_improve import suggest_self_improvements
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -105,6 +106,9 @@ class WorkspaceTools:
                 f"Path outside allowed {access} roots: {raw_path}"
             )
         return candidate
+
+    def suggest_self_improvements(self, limit: int = 5) -> dict[str, Any]:
+        return suggest_self_improvements(self.root, limit=limit)
 
     def _rel(self, path: Path) -> str:
         try:

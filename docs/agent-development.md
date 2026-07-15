@@ -1,5 +1,138 @@
 # Agent Development Log
 
+## 2026-07-15: Slash Command Compact Rows
+
+### What changed
+
+- Slash command suggestions now render each command on one compact row.
+- Command descriptions are shown after the command label instead of on a second line.
+- The list disables horizontal scrolling and uses tooltips for longer descriptions.
+
+### Why
+
+The first slash command panel could only show about one command at a time. Compact rows make multiple commands visible immediately after typing `/`.
+
+### Verification
+
+```text
+24 targeted tests passed
+```
+
+Full validation:
+```text
+156 passed
+```
+
+## 2026-07-15: Slash Command Panel Layout Fix
+
+### What changed
+
+- Slash command suggestions now expand the input bar while visible.
+- The input bar returns to normal height when commands are hidden, selected, or sent.
+- The command list height is capped so it fits above the input box.
+
+### Why
+
+The slash command list could be created but clipped by the fixed-height input bar, making it look like `/` did nothing.
+
+### Verification
+
+```text
+24 targeted tests passed
+```
+
+Full validation:
+```text
+156 passed
+```
+
+## 2026-07-15: Slash Command Input
+
+### What changed
+
+- Chat input now shows a slash-command suggestion list when the user types `/`.
+- Added `/self` to fill the self-improvement suggestion prompt.
+- Added `/check`, `/test`, and `/explain` shortcuts for common project prompts.
+- Slash suggestions support click selection plus keyboard Enter, Escape, Up, and Down handling.
+
+### Why
+
+Self-improvement should be easy to discover and repeat. Slash commands make coding-agent workflows faster without adding another permanent toolbar button.
+
+### How to use
+
+```text
+/
+/self
+```
+
+Selecting `/self` fills the prompt that asks the Agent to call `suggest_self_improvements`.
+
+### Verification
+
+```text
+26 targeted tests passed
+```
+
+Full validation:
+```text
+156 passed
+```
+
+## 2026-07-15: Self-Improvement Suggestions Tool
+
+### What changed
+
+- Added a read-only `suggest_self_improvements` Agent tool.
+- The tool scans project map data, test mapping, long files, TODO/FIXME markers, and recent run history.
+- Suggestions include title, rationale, affected files, recommended action, validation commands, risk, and score.
+- The tool is exposed through `WorkspaceTools`, `tool_schema`, and `CodeAgent._dispatch_tool`.
+
+### Why
+
+Before allowing the Agent to modify itself automatically, it needs a safe way to identify small, high-value improvements. This creates the first step of a self-improvement workflow without changing code automatically.
+
+### How to use
+
+```text
+请调用 suggest_self_improvements，列出 5 个当前项目最值得做的代码能力优化建议。
+```
+
+### Verification
+
+```text
+9 targeted tests passed
+```
+
+Full validation:
+```text
+155 passed
+```
+
+## 2026-07-15: Activity Child Panel Back Navigation
+
+### What changed
+
+- Added `Back to Activity` navigation to the current diff review dialog.
+- Added `Back to Activity` navigation to the resume history dialog.
+- Added `Back to Activity` navigation to the rollback history side panel.
+- Returning from rollback history first hides the side panel, then reopens Activity.
+
+### Why
+
+Activity is now the parent surface for recovery and review workflows. Child panels should be able to return to that parent instead of forcing users back through the main chat header.
+
+### Verification
+
+```text
+23 targeted tests passed
+```
+
+Full validation:
+```text
+153 passed
+```
+
 ## 2026-07-15: Activity Panel Back Button
 
 ### What changed

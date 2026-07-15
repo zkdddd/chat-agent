@@ -14,6 +14,8 @@ from kagent.ui.main_window import (
     _recent_workspace_roots,
     _session_workspace_summary,
     _session_title_for_workspace,
+    _slash_command_matches,
+    _slash_commands,
     _tool_entry_actions,
     _tool_event_markdown,
     _t,
@@ -197,6 +199,7 @@ def test_activity_entry_tooltips_distinguish_diff_resume_and_history(monkeypatch
     assert _t("activity") == "Activity"
     assert _t("activity_title") == "Activity Panel"
     assert _t("activity_back") == "Back"
+    assert _t("activity_back_to_activity") == "Back to Activity"
     assert "one place" in _t("activity_tip")
     assert "together" in _t("activity_intro")
     assert "current session" in _t("diff_review_tip")
@@ -207,6 +210,7 @@ def test_activity_entry_tooltips_distinguish_diff_resume_and_history(monkeypatch
     assert _t("activity")
     assert _t("activity_title")
     assert _t("activity_back")
+    assert _t("activity_back_to_activity")
     assert _t("activity_tip")
     assert _t("activity_intro")
     assert _t("diff_review_tip")
@@ -271,6 +275,18 @@ def test_activity_recent_path_lines_limits_changed_paths(monkeypatch):
         "+2 more",
     ]
     assert _activity_recent_path_lines([]) == ["No changed paths to show."]
+
+
+def test_slash_commands_include_self_improvement_prompt(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    commands = _slash_commands()
+    matches = _slash_command_matches("/self")
+
+    assert any(command["name"] == "/self" for command in commands)
+    assert [command["name"] for command in matches] == ["/self"]
+    assert "suggest_self_improvements" in matches[0]["prompt"]
+    assert _slash_command_matches("self") == []
 
 
 def test_ui_markdown_uses_english_language(tmp_path, monkeypatch):

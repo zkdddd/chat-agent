@@ -65,6 +65,28 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "suggest_self_improvements",
+                "description": (
+                    "Analyze this workspace and suggest small, low-risk coding-agent improvements. "
+                    "This is read-only: it does not edit files or run commands."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                            "description": "Maximum number of suggestions to return.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "read_file",
                 "description": "Read a UTF-8 text file from the workspace. Paths should be relative to the workspace root when possible.",
                 "parameters": {

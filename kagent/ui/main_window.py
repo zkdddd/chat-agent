@@ -4,10 +4,10 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PyQt6.QtCore import QEvent, Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QFont, QFontMetrics, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QFont, QFontMetrics, QKeySequence, QShortcut, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -118,6 +118,7 @@ UI_TEXT = {
         "activity_tip": "集中查看当前差异、恢复历史任务和 rollback 历史。",
         "activity_intro": "把代码审查、任务恢复和版本回滚入口集中在一个地方，避免顶部出现重复按钮。",
         "activity_back": "返回",
+        "activity_back_to_activity": "返回 Activity",
         "activity_open_diff": "查看当前差异",
         "activity_open_resume": "恢复历史任务",
         "activity_open_history": "打开回滚历史",
@@ -179,6 +180,15 @@ UI_TEXT = {
         "suggest_read_entry_text": "请阅读当前项目入口文件和核心配置，说明启动流程和主要模块。",
         "no_recent_workspaces": "暂无最近项目",
         "input_hint": "用自然语言描述任务，Agent 会自己决定是否读取文件、修改代码和执行命令",
+        "slash_hint": "输入 / 唤醒命令",
+        "slash_commands": "命令",
+        "slash_no_matches": "没有匹配的命令",
+        "slash_self_improve": "自优化建议",
+        "slash_self_improve_desc": "扫描项目并提出代码能力优化建议",
+        "slash_self_improve_prompt": "请调用 suggest_self_improvements，列出 5 个当前项目最值得做的代码能力优化建议。",
+        "slash_check_project": "检查项目",
+        "slash_fix_tests": "修复测试",
+        "slash_explain_project": "解释项目",
         "send": "发送",
         "stop": "停止",
         "stopping": "停止中",
@@ -282,7 +292,7 @@ UI_TEXT = {
         "feature_streaming": "流式回复",
         "feature_multi_turn": "多轮对话",
         "feature_agent_tools": "Agent 工具",
-        "input_shortcut_hint": "Enter 发送 · Shift+Enter 换行",
+        "input_shortcut_hint": "Enter 发送 · Shift+Enter 换行 · / 命令",
         "new_session": "新会话",
         "delete_session_title": "删除会话",
         "delete_session_confirm": "确定删除「{title}」吗？",
@@ -352,6 +362,7 @@ UI_TEXT = {
         "activity_tip": "Open current diffs, resumable runs, and rollback history from one place.",
         "activity_intro": "Review, resume, and rollback actions live together here so the header does not duplicate recovery entry points.",
         "activity_back": "Back",
+        "activity_back_to_activity": "Back to Activity",
         "activity_open_diff": "Review current diff",
         "activity_open_resume": "Resume previous run",
         "activity_open_history": "Open rollback history",
@@ -413,6 +424,15 @@ UI_TEXT = {
         "suggest_read_entry_text": "Read the project entry files and core config, then explain the startup flow and main modules.",
         "no_recent_workspaces": "No recent projects",
         "input_hint": "Describe a task. Agent can read files, edit code, and run commands when needed.",
+        "slash_hint": "Type / for commands",
+        "slash_commands": "Commands",
+        "slash_no_matches": "No matching commands",
+        "slash_self_improve": "Self-improve suggestions",
+        "slash_self_improve_desc": "Scan the project and suggest coding-capability improvements",
+        "slash_self_improve_prompt": "Call suggest_self_improvements and list the 5 most valuable coding-capability improvements for this project.",
+        "slash_check_project": "Check project",
+        "slash_fix_tests": "Fix tests",
+        "slash_explain_project": "Explain project",
         "send": "Send",
         "stop": "Stop",
         "stopping": "Stopping",
@@ -516,7 +536,7 @@ UI_TEXT = {
         "feature_streaming": "Streaming replies",
         "feature_multi_turn": "Multi-turn chat",
         "feature_agent_tools": "Agent tools",
-        "input_shortcut_hint": "Enter to send · Shift+Enter for newline",
+        "input_shortcut_hint": "Enter to send · Shift+Enter for newline · / commands",
         "new_session": "New chat",
         "delete_session_title": "Delete Chat",
         "delete_session_confirm": "Delete \"{title}\"?",
@@ -560,6 +580,56 @@ def _t(key: str) -> str:
 
 def _tf(key: str, **kwargs: Any) -> str:
     return _t(key).format(**kwargs)
+
+
+def _slash_commands() -> list[dict[str, str]]:
+    return [
+        {
+            "name": "/self",
+            "label": _t("slash_self_improve"),
+            "description": _t("slash_self_improve_desc"),
+            "prompt": _t("slash_self_improve_prompt"),
+        },
+        {
+            "name": "/check",
+            "label": _t("slash_check_project"),
+            "description": _t("prompt_check_project_text"),
+            "prompt": _t("prompt_check_project_text"),
+        },
+        {
+            "name": "/test",
+            "label": _t("slash_fix_tests"),
+            "description": _t("prompt_fix_tests_text"),
+            "prompt": _t("prompt_fix_tests_text"),
+        },
+        {
+            "name": "/explain",
+            "label": _t("slash_explain_project"),
+            "description": _t("prompt_explain_project_text"),
+            "prompt": _t("prompt_explain_project_text"),
+        },
+    ]
+
+
+def _slash_command_matches(text: str, limit: int = 8) -> list[dict[str, str]]:
+    raw = str(text or "").strip()
+    if not raw.startswith("/"):
+        return []
+    query = raw[1:].strip().lower()
+    matches: list[dict[str, str]] = []
+    for command in _slash_commands():
+        haystack = " ".join(
+            [
+                command.get("name", ""),
+                command.get("label", ""),
+                command.get("description", ""),
+            ]
+        ).lower()
+        if not query or query in haystack:
+            matches.append(command)
+        if len(matches) >= max(1, int(limit)):
+            break
+    return matches
 
 
 MESSAGE_BODY_STYLE = (
@@ -1419,7 +1489,7 @@ def _looks_like_agent_task(text: str) -> bool:
 
 
 class InputBox(QTextEdit):
-    def __init__(self, on_send):
+    def __init__(self, on_send, slash_handler: Callable[[str, QEvent], bool] | None = None):
         super().__init__()
         self.setPlaceholderText(_t("input_hint"))
         self.setMinimumHeight(62)
@@ -1429,8 +1499,11 @@ class InputBox(QTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.on_send = on_send
+        self.slash_handler = slash_handler
 
     def keyPressEvent(self, e):
+        if self.slash_handler is not None and self.slash_handler(self.toPlainText(), e):
+            return
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
             e.modifiers() & Qt.KeyboardModifier.ShiftModifier
         ):
@@ -2558,6 +2631,12 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         )
         header.addWidget(self.rollback_refresh_btn)
 
+        self.rollback_back_activity_btn = QPushButton(_t("activity_back_to_activity"))
+        self.rollback_back_activity_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.rollback_back_activity_btn.clicked.connect(self._return_rollback_history_to_activity)
+        self.rollback_back_activity_btn.setStyleSheet(_button_style("secondary", compact=True))
+        header.addWidget(self.rollback_back_activity_btn)
+
         layout.addLayout(header)
 
         self.rollback_list = QListWidget()
@@ -2717,6 +2796,7 @@ QListWidget::item:selected {{
     def _build_input_bar(self) -> QFrame:
         bar = QFrame()
         bar.setFixedHeight(118)
+        self.input_bar = bar
         bar.setStyleSheet(f"background: rgba(5, 7, 13, 0.96); border-top: 1px solid {C_BORDER_SOFT};")
 
         h = QHBoxLayout(bar)
@@ -2724,6 +2804,7 @@ QListWidget::item:selected {{
         h.setSpacing(12)
 
         wrap = QFrame()
+        self.input_wrap = wrap
         wrap.setStyleSheet(
             f"background: rgba(13, 22, 36, 0.94); border: 1px solid {C_BORDER}; border-radius: 18px;"
         )
@@ -2732,12 +2813,44 @@ QListWidget::item:selected {{
         w.setContentsMargins(15, 12, 15, 10)
         w.setSpacing(8)
 
-        self.input = InputBox(self.on_send)
+        self.slash_command_list = QListWidget()
+        self.slash_command_list.setVisible(False)
+        self.slash_command_list.setMaximumHeight(128)
+        self.slash_command_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.slash_command_list.setStyleSheet(
+            f"""
+QListWidget {{
+    background: rgba(8, 13, 22, 0.98);
+    border: 1px solid {C_BORDER};
+    border-radius: 14px;
+    color: {C_TEXT_MAIN};
+    font-size: 11px;
+    padding: 5px;
+}}
+QListWidget::item {{
+    padding: 5px 10px;
+    min-height: 24px;
+    border-radius: 9px;
+}}
+QListWidget::item:hover {{
+    background: rgba(56, 189, 248, 0.10);
+}}
+QListWidget::item:selected {{
+    background: rgba(56, 189, 248, 0.18);
+    color: #E0F2FE;
+}}
+""".strip()
+        )
+        self.slash_command_list.itemClicked.connect(self._apply_slash_command_item)
+        w.addWidget(self.slash_command_list)
+
+        self.input = InputBox(self.on_send, slash_handler=self._handle_input_slash_key)
         self.input.setStyleSheet(
             f"background: transparent; border: none; color: {C_TEXT_MAIN}; "
             f"selection-background-color: rgba(56, 189, 248, 0.24); "
             "font-size: 14px; font-family: 'Microsoft YaHei', 'Segoe UI';"
         )
+        self.input.textChanged.connect(self._refresh_slash_commands)
         w.addWidget(self.input)
 
         actions = QHBoxLayout()
@@ -2874,6 +2987,8 @@ QListWidget::item:selected {{
             self.activity_btn.setToolTip(_t("activity_tip"))
         if hasattr(self, "rollback_refresh_btn"):
             self.rollback_refresh_btn.setText(_t("refresh"))
+        if hasattr(self, "rollback_back_activity_btn"):
+            self.rollback_back_activity_btn.setText(_t("activity_back_to_activity"))
         if hasattr(self, "rollback_history_title_label"):
             self.rollback_history_title_label.setText(_t("rollback_history_title"))
         if hasattr(self, "rollback_open_trace_btn"):
@@ -2882,6 +2997,7 @@ QListWidget::item:selected {{
             self.rollback_restore_btn.setText(_t("restore"))
         if hasattr(self, "input"):
             self.input.setPlaceholderText(_t("input_hint"))
+            self._refresh_slash_commands()
         if hasattr(self, "input_hint_label"):
             self.input_hint_label.setText(_t("input_shortcut_hint"))
         if hasattr(self, "agent_btn"):
@@ -2901,6 +3017,81 @@ QListWidget::item:selected {{
         self._sync_rollback_history_button_style()
         if hasattr(self, "chat_title_label") and hasattr(self, "chat_subtitle_label"):
             self._refresh_chat_header()
+
+    def _refresh_slash_commands(self) -> None:
+        if not hasattr(self, "slash_command_list") or not hasattr(self, "input"):
+            return
+        text = self.input.toPlainText()
+        should_show = text.strip().startswith("/") and "\n" not in text
+        self.slash_command_list.clear()
+        if not should_show:
+            self.slash_command_list.setVisible(False)
+            self._sync_slash_command_layout(False)
+            return
+        matches = _slash_command_matches(text)
+        if matches:
+            for command in matches:
+                item = QListWidgetItem(
+                    f"{command['name']}  {command['label']} - {command['description']}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, command)
+                item.setToolTip(str(command.get("description") or ""))
+                self.slash_command_list.addItem(item)
+            self.slash_command_list.setCurrentRow(0)
+        else:
+            item = QListWidgetItem(_t("slash_no_matches"))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self.slash_command_list.addItem(item)
+        self.slash_command_list.setVisible(True)
+        self._sync_slash_command_layout(True)
+
+    def _sync_slash_command_layout(self, visible: bool) -> None:
+        if hasattr(self, "input_bar"):
+            self.input_bar.setFixedHeight(238 if visible else 118)
+        if hasattr(self, "input_wrap"):
+            self.input_wrap.setMinimumHeight(202 if visible else 0)
+
+    def _apply_slash_command_item(self, item: QListWidgetItem | None) -> None:
+        if item is None:
+            return
+        command = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(command, dict):
+            return
+        prompt = str(command.get("prompt") or "").strip()
+        if not prompt:
+            return
+        self.input.blockSignals(True)
+        self.input.setPlainText(prompt)
+        self.input.blockSignals(False)
+        self.slash_command_list.setVisible(False)
+        self._sync_slash_command_layout(False)
+        self.input.setFocus()
+        cursor = self.input.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.input.setTextCursor(cursor)
+
+    def _handle_input_slash_key(self, text: str, event: QEvent) -> bool:
+        if not hasattr(self, "slash_command_list") or not self.slash_command_list.isVisible():
+            return False
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.slash_command_list.setVisible(False)
+            self._sync_slash_command_layout(False)
+            return True
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            count = self.slash_command_list.count()
+            if count <= 0:
+                return True
+            current = self.slash_command_list.currentRow()
+            delta = -1 if key == Qt.Key.Key_Up else 1
+            self.slash_command_list.setCurrentRow(max(0, min(count - 1, current + delta)))
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
+            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self._apply_slash_command_item(self.slash_command_list.currentItem())
+            return True
+        return False
 
     def _sync_workspace_mode_chip(self) -> None:
         if not hasattr(self, "chat_mode_chip"):
@@ -4027,6 +4218,9 @@ QListWidget::item:selected {{
         layout.addLayout(body, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        back_activity_button = buttons.addButton(
+            _t("activity_back_to_activity"), QDialogButtonBox.ButtonRole.ActionRole
+        )
         copy_button = buttons.addButton(
             _t("copy_resume_prompt"), QDialogButtonBox.ButtonRole.ActionRole
         )
@@ -4036,6 +4230,9 @@ QListWidget::item:selected {{
         copy_button.setEnabled(False)
         resume_button.setEnabled(False)
         buttons.rejected.connect(dialog.reject)
+        back_activity_button.clicked.connect(
+            lambda _checked=False, dlg=dialog: self._return_dialog_to_activity(dlg)
+        )
         layout.addWidget(buttons)
 
         contexts: dict[str, dict[str, Any]] = {}
@@ -4100,6 +4297,14 @@ QListWidget::item:selected {{
             prompt_editor.clear()
 
         dialog.exec()
+
+    def _return_dialog_to_activity(self, dialog: QDialog) -> None:
+        dialog.reject()
+        QTimer.singleShot(0, self._show_activity_panel)
+
+    def _return_rollback_history_to_activity(self) -> None:
+        self._toggle_rollback_history_panel(False)
+        QTimer.singleShot(0, self._show_activity_panel)
 
     def _show_activity_panel(self) -> None:
         dialog = QDialog(self)
@@ -4272,6 +4477,12 @@ QListWidget::item:selected {{
         layout.addWidget(view, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        back_activity_button = buttons.addButton(
+            _t("activity_back_to_activity"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        back_activity_button.clicked.connect(
+            lambda _checked=False, dlg=dialog: self._return_dialog_to_activity(dlg)
+        )
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.exec()
@@ -4512,6 +4723,9 @@ QListWidget::item:selected {{
 
     def on_send(self):
         text = self.input.toPlainText().strip()
+        if hasattr(self, "slash_command_list"):
+            self.slash_command_list.setVisible(False)
+            self._sync_slash_command_layout(False)
         self._submit_text(text, clear_input=True)
 
     def _start_worker(self, worker: AgentWorker | None):
