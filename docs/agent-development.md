@@ -1,5 +1,24 @@
 # Agent Development Log
 
+## 2026-07-16: Persistent Runtime Model Preferences
+
+### What changed
+
+- Added `kagent.ui_preferences` for lightweight UI preference persistence.
+- `/model` and `/reasoning` selections are saved to `.kagent_state/ui_preferences.json`.
+- The main window restores the saved model and reasoning effort on startup before falling back to `.env` defaults.
+- Preference loading tolerates missing files, invalid JSON, unknown models, and invalid reasoning values.
+
+### Why
+
+Model and reasoning switching worked, but the selection was only held in the current window. Persisting the runtime preferences avoids confusing resets after restarting the app and makes model switching feel like a real setting rather than a temporary command.
+
+### Verification
+
+```text
+Preference round-trip and fallback tests added.
+```
+
 ## 2026-07-16: Runtime Model Metadata Prompt
 
 ### What changed

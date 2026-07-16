@@ -18,6 +18,7 @@
 - The chat input now supports slash commands: type `/` to open command suggestions, including `/self` for self-improvement suggestions.
 - Slash commands now include `/model ...` entries for switching the active chat and coding Agent model.
 - Slash commands now include `/reasoning ...` entries for switching reasoning effort: Low, Medium, High, and Extra high.
+- The selected model and reasoning effort are persisted locally and restored when the app starts again.
 - Chat and coding Agent requests now inject runtime metadata so the assistant can answer the current model and reasoning effort from the actual request settings.
 - Windows launch scripts prefer the project `.venv` instead of a hardcoded local Python path.
 - UI option labels, dialogs, tool cards, rollback actions, diff review, and task resume text now follow the selected app language.
@@ -91,6 +92,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - 聊天输入框支持 `/` 唤醒命令面板，可以用 `/self` 快速填入自优化建议提示。
 - 聊天输入框支持 `/model` 模型切换命令，当前已内置 GPT-5.5、GPT-5.4、GPT-5.4-Mini、GPT-5.3-Codex 和 GPT-5.2。
 - 聊天输入框支持 `/reasoning` 推理强度切换命令，当前支持低、中、高、超高四档，并会作用于普通聊天、标题生成和代码 Agent 请求。
+- `/model` 和 `/reasoning` 的选择会保存到本地状态文件，应用下次启动会自动恢复上次选择。
 - 普通聊天和代码 Agent 请求会注入当前运行时模型和推理强度元信息，因此询问“当前用的是什么模型”时会优先按实际请求设置回答。
 - Agent 会压缩喂给模型的工具输出，避免大文件、大目录和长命令输出撑爆上下文。
 - Agent 支持长期项目记忆，会按工作区保存项目结构摘要、入口文件、配置文件、常用验证命令和稳定偏好，下次运行自动注入上下文。

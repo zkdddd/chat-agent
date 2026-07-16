@@ -52,6 +52,7 @@ from ..config import (
     model_display_name,
     normalize_reasoning_effort,
 )
+from ..ui_preferences import load_ui_preferences, save_ui_preferences
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
 
@@ -2446,8 +2447,11 @@ class ChatWindow(QMainWindow):
         self._rollback_history_items: list[dict[str, Any]] = []
         self._selected_rollback_id: int | None = None
         self._render_seq = 0
-        self._selected_model = MODEL
-        self._selected_reasoning_effort = normalize_reasoning_effort(REASONING_EFFORT)
+        preferences = load_ui_preferences()
+        self._selected_model = preferences.get("model") or MODEL
+        self._selected_reasoning_effort = normalize_reasoning_effort(
+            preferences.get("reasoning_effort") or REASONING_EFFORT
+        )
 
         root = QWidget()
         root.setObjectName("root")
@@ -3229,8 +3233,17 @@ QScrollBar::add-page, QScrollBar::sub-page {{
     def _model_reasoning_label(self) -> str:
         return f"{self._selected_model} / {_reasoning_effort_label(self._selected_reasoning_effort)}"
 
+    def _save_runtime_preferences(self) -> None:
+        save_ui_preferences(
+            {
+                "model": self._selected_model,
+                "reasoning_effort": self._selected_reasoning_effort,
+            }
+        )
+
     def _set_selected_model(self, model: str) -> None:
         self._selected_model = str(model).strip() or MODEL
+        self._save_runtime_preferences()
         if hasattr(self, "chat_model_chip"):
             self.chat_model_chip.setText(self._model_reasoning_label())
         if hasattr(self, "status_model"):
@@ -3243,6 +3256,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
     def _set_selected_reasoning_effort(self, effort: str) -> None:
         self._selected_reasoning_effort = normalize_reasoning_effort(effort)
+        self._save_runtime_preferences()
         if hasattr(self, "chat_model_chip"):
             self.chat_model_chip.setText(self._model_reasoning_label())
         if hasattr(self, "status_model"):
