@@ -44,7 +44,14 @@ from ..agent.run_history import list_run_history
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_self_check import format_run_health_report
 from ..agent.task_resume import build_latest_resume_context, build_resume_context, format_resume_context
-from ..config import MODEL, available_models, model_display_name
+from ..config import (
+    MODEL,
+    REASONING_EFFORT,
+    available_models,
+    available_reasoning_efforts,
+    model_display_name,
+    normalize_reasoning_effort,
+)
 from .agent_worker import AgentWorker
 from .markdown_view import highlight_css, render
 
@@ -189,6 +196,13 @@ UI_TEXT = {
         "slash_model": "切换模型",
         "slash_model_desc": "切换当前聊天使用的模型",
         "model_switched": "已切换模型：{model}",
+        "slash_reasoning": "推理强度",
+        "slash_reasoning_desc": "切换当前聊天使用的推理强度",
+        "reasoning_switched": "已切换推理强度：{effort}",
+        "reasoning_low": "低",
+        "reasoning_medium": "中",
+        "reasoning_high": "高",
+        "reasoning_xhigh": "超高",
         "slash_check_project": "检查项目",
         "slash_fix_tests": "修复测试",
         "slash_explain_project": "解释项目",
@@ -436,6 +450,13 @@ UI_TEXT = {
         "slash_model": "Switch model",
         "slash_model_desc": "Switch the model used by this chat",
         "model_switched": "Model switched: {model}",
+        "slash_reasoning": "Reasoning effort",
+        "slash_reasoning_desc": "Switch the reasoning effort used by this chat",
+        "reasoning_switched": "Reasoning effort switched: {effort}",
+        "reasoning_low": "Low",
+        "reasoning_medium": "Medium",
+        "reasoning_high": "High",
+        "reasoning_xhigh": "Extra high",
         "slash_check_project": "Check project",
         "slash_fix_tests": "Fix tests",
         "slash_explain_project": "Explain project",
@@ -588,6 +609,16 @@ def _tf(key: str, **kwargs: Any) -> str:
     return _t(key).format(**kwargs)
 
 
+def _reasoning_effort_label(effort: str) -> str:
+    key = {
+        "low": "reasoning_low",
+        "medium": "reasoning_medium",
+        "high": "reasoning_high",
+        "xhigh": "reasoning_xhigh",
+    }.get(normalize_reasoning_effort(effort))
+    return _t(key) if key else effort
+
+
 def _slash_commands() -> list[dict[str, str]]:
     return [
         {
@@ -621,6 +652,13 @@ def _slash_commands() -> list[dict[str, str]]:
             "prompt": "",
             "action": "open_model_menu",
         },
+        {
+            "name": "/reasoning",
+            "label": _t("slash_reasoning"),
+            "description": _t("slash_reasoning_desc"),
+            "prompt": "",
+            "action": "open_reasoning_menu",
+        },
     ]
 
 
@@ -641,6 +679,23 @@ def _slash_model_commands() -> list[dict[str, str]]:
     return commands
 
 
+def _slash_reasoning_commands() -> list[dict[str, str]]:
+    commands: list[dict[str, str]] = []
+    for effort in available_reasoning_efforts():
+        display = _reasoning_effort_label(effort)
+        commands.append(
+            {
+                "name": f"/reasoning {display}",
+                "label": _t("slash_reasoning"),
+                "description": f"{_t('slash_reasoning_desc')}: {display}",
+                "prompt": "",
+                "action": "set_reasoning",
+                "reasoning_effort": effort,
+            }
+        )
+    return commands
+
+
 def _slash_command_matches(text: str, limit: int = 8) -> list[dict[str, str]]:
     original = str(text or "")
     raw = original.strip()
@@ -652,6 +707,14 @@ def _slash_command_matches(text: str, limit: int = 8) -> list[dict[str, str]]:
         model_query = query.removeprefix("model").strip()
         source = _slash_model_commands() if model_query or original.rstrip("\n").endswith(" ") else _slash_commands()
         query = model_query if model_query else "model"
+    elif query.startswith("reasoning"):
+        reasoning_query = query.removeprefix("reasoning").strip()
+        source = (
+            _slash_reasoning_commands()
+            if reasoning_query or original.rstrip("\n").endswith(" ")
+            else _slash_commands()
+        )
+        query = reasoning_query if reasoning_query else "reasoning"
     matches: list[dict[str, str]] = []
     for command in source:
         haystack = " ".join(
@@ -2384,6 +2447,7 @@ class ChatWindow(QMainWindow):
         self._selected_rollback_id: int | None = None
         self._render_seq = 0
         self._selected_model = MODEL
+        self._selected_reasoning_effort = normalize_reasoning_effort(REASONING_EFFORT)
 
         root = QWidget()
         root.setObjectName("root")
@@ -2794,12 +2858,12 @@ QListWidget::item:selected {{
         self.chat_title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
         self.chat_title_label.setStyleSheet(f"color: {C_TEXT_MAIN};")
 
-        self.chat_subtitle_label = QLabel(f"{self._selected_model} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}")
+        self.chat_subtitle_label = QLabel(f"{self._model_reasoning_label()} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}")
         self.chat_subtitle_label.setFont(QFont("Microsoft YaHei", 8))
         self.chat_subtitle_label.setStyleSheet(f"color: {C_TEXT_SUB};")
 
         self.chat_subtitle_label.setText(
-            f"{self._selected_model} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}"
+            f"{self._model_reasoning_label()} | {_t('workspace')} | 0 {_t('messages')} | {_t('ready')}"
         )
 
         title_stack.addWidget(self.chat_title_label)
@@ -2816,7 +2880,7 @@ QListWidget::item:selected {{
 
         self._sync_rollback_history_button_style()
 
-        self.chat_model_chip = _chip_label(self._selected_model, "#BAE6FD", "rgba(56, 189, 248, 0.12)", "rgba(56, 189, 248, 0.28)")
+        self.chat_model_chip = _chip_label(self._model_reasoning_label(), "#BAE6FD", "rgba(56, 189, 248, 0.12)", "rgba(56, 189, 248, 0.28)")
         self.chat_mode_chip = _chip_label("Chat", "#CCFBF1", "rgba(20, 184, 166, 0.12)", "rgba(20, 184, 166, 0.28)")
         self.chat_mode_chip.setText(_t("workspace"))
         self.chat_mode_chip.setStyleSheet(
@@ -2969,7 +3033,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         h = QHBoxLayout(bar)
         h.setContentsMargins(16, 0, 16, 0)
 
-        self.status_model = _chip_label(self._selected_model, "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
+        self.status_model = _chip_label(self._model_reasoning_label(), "#F5F3FF", "rgba(124, 58, 237, 0.16)", "rgba(124, 58, 237, 0.34)")
         self.status_model.setVisible(False)
         h.addWidget(self.status_model)
         h.addStretch(1)
@@ -3123,10 +3187,28 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             cursor.movePosition(QTextCursor.MoveOperation.End)
             self.input.setTextCursor(cursor)
             return
+        if command.get("action") == "open_reasoning_menu":
+            self.input.blockSignals(True)
+            self.input.setPlainText("/reasoning ")
+            self.input.blockSignals(False)
+            self._refresh_slash_commands()
+            self.input.setFocus()
+            cursor = self.input.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.input.setTextCursor(cursor)
+            return
         if command.get("action") == "set_model":
             model = str(command.get("model") or "").strip()
             if model:
                 self._set_selected_model(model)
+                self.input.clear()
+                self.slash_command_list.setVisible(False)
+                self._sync_slash_command_layout(False)
+            return
+        if command.get("action") == "set_reasoning":
+            effort = str(command.get("reasoning_effort") or "").strip()
+            if effort:
+                self._set_selected_reasoning_effort(effort)
                 self.input.clear()
                 self.slash_command_list.setVisible(False)
                 self._sync_slash_command_layout(False)
@@ -3144,16 +3226,32 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.input.setTextCursor(cursor)
 
+    def _model_reasoning_label(self) -> str:
+        return f"{self._selected_model} / {_reasoning_effort_label(self._selected_reasoning_effort)}"
+
     def _set_selected_model(self, model: str) -> None:
         self._selected_model = str(model).strip() or MODEL
         if hasattr(self, "chat_model_chip"):
-            self.chat_model_chip.setText(self._selected_model)
+            self.chat_model_chip.setText(self._model_reasoning_label())
         if hasattr(self, "status_model"):
-            self.status_model.setText(self._selected_model)
+            self.status_model.setText(self._model_reasoning_label())
         self._refresh_chat_header()
         self._update_status()
         if hasattr(self, "input_hint_label"):
             self.input_hint_label.setText(_tf("model_switched", model=self._selected_model))
+            QTimer.singleShot(2200, lambda: self.input_hint_label.setText(_t("input_shortcut_hint")))
+
+    def _set_selected_reasoning_effort(self, effort: str) -> None:
+        self._selected_reasoning_effort = normalize_reasoning_effort(effort)
+        if hasattr(self, "chat_model_chip"):
+            self.chat_model_chip.setText(self._model_reasoning_label())
+        if hasattr(self, "status_model"):
+            self.status_model.setText(self._model_reasoning_label())
+        self._refresh_chat_header()
+        self._update_status()
+        if hasattr(self, "input_hint_label"):
+            label = _reasoning_effort_label(self._selected_reasoning_effort)
+            self.input_hint_label.setText(_tf("reasoning_switched", effort=label))
             QTimer.singleShot(2200, lambda: self.input_hint_label.setText(_t("input_shortcut_hint")))
 
     def _handle_input_slash_key(self, text: str, event: QEvent) -> bool:
@@ -4633,7 +4731,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         count = len(db.get_messages(self.current_session)) if self.current_session else 0
 
         self.chat_title_label.setText(title)
-        self.chat_subtitle_label.setText(f"{self._selected_model} ? Workspace ? {count} ??? ? {self._activity}")
+        self.chat_subtitle_label.setText(f"{self._model_reasoning_label()} ? Workspace ? {count} ??? ? {self._activity}")
         self.chat_mode_chip.setText(_t("workspace"))
         self._sync_workspace_mode_chip()
 
@@ -4799,6 +4897,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             history,
             workspace_root=self._current_workspace_root(),
             model=self._selected_model,
+            reasoning_effort=self._selected_reasoning_effort,
         )
         self.worker = worker
         self._attach_worker_signals(worker)
@@ -4901,7 +5000,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
         self.chat_title_label.setText(title)
         self.chat_subtitle_label.setText(
-            f"{self._selected_model} | {self._workspace_header_label()} | {self._activity_label()}"
+            f"{self._model_reasoning_label()} | {self._workspace_header_label()} | {self._activity_label()}"
         )
         if hasattr(self, "workspace_btn"):
             self.workspace_btn.setText(_workspace_button_label(self._current_workspace_root()))

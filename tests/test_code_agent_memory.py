@@ -18,7 +18,7 @@ def test_code_agent_injects_project_memory_into_model_messages(tmp_path, monkeyp
         captured["messages"] = kwargs["messages"]
         return [_chunk(content="完成")]
 
-    monkeypatch.setattr("kagent.agent.code_agent.client.chat.completions.create", fake_create)
+    monkeypatch.setattr("kagent.agent.code_agent.create_chat_completion_with_reasoning", fake_create)
 
     agent = CodeAgent(workspace_root=str(tmp_path), session_id="session-1")
     report = agent.run([{"role": "user", "content": "说明项目"}], max_rounds=1)
@@ -50,6 +50,36 @@ def test_code_agent_final_prompt_includes_trust_check(tmp_path, monkeypatch):
 
     assert "Final response trust check." in prompt
     assert "unverified_changes" in prompt
+
+
+def test_code_agent_injects_runtime_metadata_into_model_messages(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.db.DB_PATH", str(tmp_path / "kagent.db"))
+    monkeypatch.setattr("kagent.agent.workspace.ROLLBACK_ROOT", str(tmp_path / "rollback"))
+    db.init_db()
+
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        return [_chunk(content="done")]
+
+    monkeypatch.setattr("kagent.agent.code_agent.create_chat_completion_with_reasoning", fake_create)
+
+    agent = CodeAgent(
+        workspace_root=str(tmp_path),
+        session_id="session-1",
+        model="gpt-5.5",
+        reasoning_effort="high",
+    )
+    agent.run([{"role": "user", "content": "what model are you using?"}], max_rounds=1)
+
+    system_text = "\n\n".join(
+        message["content"]
+        for message in captured["messages"]
+        if message.get("role") == "system"
+    )
+    assert "Current runtime model: gpt-5.5" in system_text
+    assert "Current reasoning effort: high" in system_text
 
 
 def _chunk(content=None, tool_calls=None):

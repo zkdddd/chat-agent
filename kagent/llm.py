@@ -11,7 +11,9 @@ from .config import (
     MODEL,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
+    REASONING_EFFORT,
     SYSTEM_PROMPT,
+    normalize_reasoning_effort,
 )
 from .context import manage_context
 
@@ -26,12 +28,62 @@ AGENT_REQUEST_TIMEOUT_SECONDS = float(
 )
 
 
+def _reasoning_param(reasoning_effort: str | None) -> dict[str, str]:
+    return {"reasoning_effort": normalize_reasoning_effort(reasoning_effort or REASONING_EFFORT)}
+
+
+def runtime_metadata_prompt(model: str | None, reasoning_effort: str | None) -> str:
+    active_model = str(model or MODEL).strip() or MODEL
+    active_reasoning = normalize_reasoning_effort(reasoning_effort or REASONING_EFFORT)
+    return (
+        "Runtime request metadata.\n"
+        f"- Current runtime model: {active_model}\n"
+        f"- Current reasoning effort: {active_reasoning}\n"
+        "If the user asks what model or reasoning effort is currently being used, "
+        "answer from this metadata instead of guessing from training data or defaults."
+    )
+
+
+def _is_unsupported_reasoning_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "reasoning_effort" in text and (
+        "unsupported" in text
+        or "unknown" in text
+        or "invalid" in text
+        or "unrecognized" in text
+        or "extra inputs" in text
+        or "not permitted" in text
+    )
+
+
+def create_chat_completion_with_reasoning(
+    *,
+    reasoning_effort: str | None = None,
+    retry_without_reasoning: bool = True,
+    **kwargs,
+):
+    try:
+        return client.chat.completions.create(
+            **kwargs,
+            **_reasoning_param(reasoning_effort),
+        )
+    except Exception as exc:
+        if not retry_without_reasoning or not _is_unsupported_reasoning_error(exc):
+            raise
+        return client.chat.completions.create(**kwargs)
+
+
 def open_chat_stream(
     messages: list[dict],
     model: str | None = None,
+    reasoning_effort: str | None = None,
     timeout: float | None = STREAM_REQUEST_TIMEOUT_SECONDS,
 ) -> Stream:
-    full = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    selected_model = model or MODEL
+    full = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": runtime_metadata_prompt(selected_model, reasoning_effort)},
+    ] + messages
     full, _ = manage_context(
         full,
         max_tokens=CONTEXT_MAX_TOKENS,
@@ -39,21 +91,26 @@ def open_chat_stream(
         summary_max_chars=CONTEXT_SUMMARY_MAX_CHARS,
         per_message_max_chars=CONTEXT_PER_MESSAGE_MAX_CHARS,
     )
-    return client.chat.completions.create(
-        model=model or MODEL,
+    return create_chat_completion_with_reasoning(
+        model=selected_model,
         messages=full,
         stream=True,
         temperature=0.7,
+        reasoning_effort=reasoning_effort,
         timeout=timeout,
     )
 
 
-def stream_chat(messages: list[dict], model: str | None = None) -> Iterator[str]:
+def stream_chat(
+    messages: list[dict],
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> Iterator[str]:
     """同步流式调用 OpenAI Chat Completions，逐段 yield 文本。
 
     供 QThread worker 调用：阻塞迭代，UI 线程通过 signal 接收 chunk。
     """
-    stream = open_chat_stream(messages, model=model)
+    stream = open_chat_stream(messages, model=model, reasoning_effort=reasoning_effort)
     try:
         for chunk in stream:
             if not chunk.choices:
@@ -68,11 +125,12 @@ def stream_chat(messages: list[dict], model: str | None = None) -> Iterator[str]
 def generate_title(
     first_user_msg: str,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     timeout: float | None = TITLE_REQUEST_TIMEOUT_SECONDS,
 ) -> str:
     """根据首条用户消息生成会话标题（4-12 字）。"""
     try:
-        resp = client.chat.completions.create(
+        resp = create_chat_completion_with_reasoning(
             model=model or MODEL,
             messages=[
                 {
@@ -83,6 +141,7 @@ def generate_title(
             ],
             temperature=0.3,
             max_tokens=32,
+            reasoning_effort=reasoning_effort,
             timeout=timeout,
         )
         title = (resp.choices[0].message.content or "").strip().strip("\"'""''")

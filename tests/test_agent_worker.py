@@ -17,10 +17,19 @@ def test_agent_worker_passes_workspace_root_to_code_agent(tmp_path, monkeypatch)
     captured = {}
 
     class FakeCodeAgent:
-        def __init__(self, *, confirm_tool, workspace_root=None, session_id=None, model=None):
+        def __init__(
+            self,
+            *,
+            confirm_tool,
+            workspace_root=None,
+            session_id=None,
+            model=None,
+            reasoning_effort=None,
+        ):
             captured["workspace_root"] = workspace_root
             captured["session_id"] = session_id
             captured["model"] = model
+            captured["reasoning_effort"] = reasoning_effort
 
         def run(self, history, emit, on_event, should_stop):
             return "### 结果\n\nok"
@@ -37,6 +46,7 @@ def test_agent_worker_passes_workspace_root_to_code_agent(tmp_path, monkeypatch)
         [{"role": "user", "content": "continue"}],
         workspace_root=str(tmp_path),
         model="gpt-5.5",
+        reasoning_effort="high",
     )
     worker.done.connect(lambda answer: captured.setdefault("answer", answer))
 
@@ -45,4 +55,5 @@ def test_agent_worker_passes_workspace_root_to_code_agent(tmp_path, monkeypatch)
     assert captured["workspace_root"] == str(tmp_path)
     assert captured["session_id"] == "session-1"
     assert captured["model"] == "gpt-5.5"
+    assert captured["reasoning_effort"] == "high"
     assert captured["answer"] == "ok"

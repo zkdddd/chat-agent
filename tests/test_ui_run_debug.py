@@ -298,7 +298,14 @@ def test_slash_commands_include_model_switches(monkeypatch):
     model_values = [command.get("model") for command in model_matches]
     labels = [command.get("name") for command in model_matches]
 
-    assert [command["name"] for command in top_level] == ["/self", "/check", "/test", "/explain", "/model"]
+    assert [command["name"] for command in top_level] == [
+        "/self",
+        "/check",
+        "/test",
+        "/explain",
+        "/model",
+        "/reasoning",
+    ]
     assert model_entry[0]["action"] == "open_model_menu"
     assert "gpt-5.5" in model_values
     assert "gpt-5.4" in model_values
@@ -307,6 +314,23 @@ def test_slash_commands_include_model_switches(monkeypatch):
     assert "gpt-5.2" in model_values
     assert "/model GPT-5.5" in labels
     assert all(command.get("action") == "set_model" for command in model_matches)
+
+
+def test_slash_commands_include_reasoning_switches(monkeypatch):
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    reasoning_entry = _slash_command_matches("/reasoning")
+    reasoning_matches = _slash_command_matches("/reasoning ")
+    efforts = [command.get("reasoning_effort") for command in reasoning_matches]
+    labels = [command.get("name") for command in reasoning_matches]
+
+    assert reasoning_entry[0]["action"] == "open_reasoning_menu"
+    assert efforts == ["low", "medium", "high", "xhigh"]
+    assert "/reasoning Low" in labels
+    assert "/reasoning Medium" in labels
+    assert "/reasoning High" in labels
+    assert "/reasoning Extra high" in labels
+    assert all(command.get("action") == "set_reasoning" for command in reasoning_matches)
 
 
 def test_ui_markdown_uses_english_language(tmp_path, monkeypatch):

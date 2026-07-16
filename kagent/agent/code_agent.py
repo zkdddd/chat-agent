@@ -16,9 +16,15 @@ from ..config import (
     FILESYSTEM_READ_SCOPE,
     FILESYSTEM_WRITE_SCOPE,
     MODEL,
+    REASONING_EFFORT,
+    normalize_reasoning_effort,
 )
 from ..context import manage_context
-from ..llm import AGENT_REQUEST_TIMEOUT_SECONDS, client
+from ..llm import (
+    AGENT_REQUEST_TIMEOUT_SECONDS,
+    create_chat_completion_with_reasoning,
+    runtime_metadata_prompt,
+)
 from .agent_stream import AggregatedAssistantMessage, aggregate_chat_completion_stream
 from .change_plan import build_change_plan
 from .failure_diagnostics import extract_failure_diagnostics
@@ -176,6 +182,7 @@ class CodeAgent:
         self,
         workspace_root: str | None = None,
         model: str = MODEL,
+        reasoning_effort: str = REASONING_EFFORT,
         confirm_tool: ConfirmFn | None = None,
         session_id: str | None = None,
     ):
@@ -185,6 +192,7 @@ class CodeAgent:
             else WorkspaceTools(session_id=session_id)
         )
         self.model = model
+        self.reasoning_effort = normalize_reasoning_effort(reasoning_effort)
         self.confirm_tool = confirm_tool
         self.session_id = session_id
         self.run_logger: RunLogger | None = None
@@ -388,7 +396,7 @@ class CodeAgent:
                 self._emit(emit, report_parts, "### 模型输出\n\n")
             self._emit(emit, report_parts, delta)
 
-        stream = client.chat.completions.create(
+        stream = create_chat_completion_with_reasoning(
             model=self.model,
             messages=request_messages,
             tools=tool_schema(),
@@ -396,6 +404,7 @@ class CodeAgent:
             temperature=0.2,
             timeout=AGENT_REQUEST_TIMEOUT_SECONDS,
             stream=True,
+            reasoning_effort=self.reasoning_effort,
         )
         try:
             return (
@@ -1155,6 +1164,8 @@ class CodeAgent:
                         "Use absolute paths only when the user's task clearly requires them. "
                         "Do not write, delete, rename, or run commands outside the allowed permission scope."
                     )
+                    + "\n\n"
+                    + runtime_metadata_prompt(self.model, self.reasoning_effort)
                     + "\n\n"
                     + AGENT_WORKFLOW_HINT
                 ),

@@ -1,5 +1,54 @@
 # Agent Development Log
 
+## 2026-07-16: Runtime Model Metadata Prompt
+
+### What changed
+
+- Normal chat requests now add a system metadata message with the actual runtime model and reasoning effort.
+- Coding Agent requests now include the same metadata inside the main system context.
+- The metadata tells the model to answer model/reasoning questions from the current request settings instead of guessing from defaults or training data.
+
+### Why
+
+After switching models, asking the assistant "what model are you using" could still produce the old default model name because model self-identification is unreliable. The reliable source is the application runtime setting, so kagent now injects that setting into every model request.
+
+### Verification
+
+```text
+Targeted tests cover runtime metadata injection for normal chat and CodeAgent.
+```
+
+## 2026-07-16: Slash Reasoning Effort Switcher
+
+### What changed
+
+- Added a two-level `/reasoning` slash command for switching reasoning effort.
+- The second-level menu exposes `Low`, `Medium`, `High`, and `Extra high` labels, mapped to `low`, `medium`, `high`, and `xhigh`.
+- The selected reasoning effort is shown together with the selected model in the chat header/status chip.
+- `AgentWorker`, normal chat streaming, title generation, and `CodeAgent` now receive the selected reasoning effort.
+- Model requests now retry without `reasoning_effort` if the current API endpoint rejects that parameter, so chat and coding runs keep working.
+
+### Why
+
+The user wanted reasoning intensity to work like model selection, but without crowding the slash command list. A second-level `/reasoning` menu keeps the main command panel readable while making the runtime setting explicit and easy to change.
+
+### API availability check
+
+Using the current configured API endpoint and default model:
+
+```text
+gpt-5.4-mini low: OK
+gpt-5.4-mini medium: OK
+gpt-5.4-mini high: OK
+gpt-5.4-mini xhigh: OK
+```
+
+### Verification
+
+```text
+34 targeted tests passed
+```
+
 ## 2026-07-15: Two-Level Slash Model Menu
 
 ### What changed

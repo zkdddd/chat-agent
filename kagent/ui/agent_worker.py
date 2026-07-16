@@ -9,6 +9,8 @@ from ..config import (
     CONTEXT_MAX_TOKENS,
     CONTEXT_PER_MESSAGE_MAX_CHARS,
     CONTEXT_SUMMARY_MAX_CHARS,
+    REASONING_EFFORT,
+    normalize_reasoning_effort,
 )
 from ..context import prepare_session_history
 
@@ -29,6 +31,7 @@ class AgentWorker(QThread):
         history: list[dict],
         workspace_root: str | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ):
         super().__init__()
         self.session_id = session_id
@@ -36,6 +39,7 @@ class AgentWorker(QThread):
         self.history = history
         self.workspace_root = workspace_root
         self.model = model
+        self.reasoning_effort = normalize_reasoning_effort(reasoning_effort or REASONING_EFFORT)
         self._stop = False
         self._approval_lock = threading.Lock()
         self._approval_waiters: dict[str, dict[str, object]] = {}
@@ -54,7 +58,11 @@ class AgentWorker(QThread):
             return
 
         def _run() -> None:
-            title = llm.generate_title(self.message, model=self.model)
+            title = llm.generate_title(
+                self.message,
+                model=self.model,
+                reasoning_effort=self.reasoning_effort,
+            )
             if not title:
                 return
             db.rename_session(self.session_id, title)
@@ -175,7 +183,11 @@ class AgentWorker(QThread):
 
             if not self.workspace_root:
                 chunks: list[str] = []
-                for chunk in llm.stream_chat(agent_history, model=self.model):
+                for chunk in llm.stream_chat(
+                    agent_history,
+                    model=self.model,
+                    reasoning_effort=self.reasoning_effort,
+                ):
                     if self._stop:
                         break
                     chunks.append(chunk)
@@ -191,6 +203,7 @@ class AgentWorker(QThread):
                 workspace_root=self.workspace_root,
                 session_id=self.session_id,
                 model=self.model or None,
+                reasoning_effort=self.reasoning_effort,
             )
             report = agent.run(
                 agent_history,

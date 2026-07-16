@@ -12,6 +12,8 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 MODEL = os.getenv("MODEL", "gpt-5.4-mini")
 DEFAULT_MODEL_OPTIONS = "gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2"
 MODEL_OPTIONS = os.getenv("KAGENT_MODEL_OPTIONS", DEFAULT_MODEL_OPTIONS)
+REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"]
+REASONING_EFFORT = os.getenv("KAGENT_REASONING_EFFORT", "medium").strip().lower()
 APP_LANGUAGE = os.getenv("APP_LANGUAGE", "zh").strip().lower()
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "kagent.db"))
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", str(BASE_DIR.parent))
@@ -40,6 +42,20 @@ def model_display_name(model: str) -> str:
     if not parts:
         return str(model or "")
     return "-".join(part.upper() if idx == 0 else part.capitalize() for idx, part in enumerate(parts))
+
+
+def available_reasoning_efforts() -> list[str]:
+    return list(REASONING_EFFORT_OPTIONS)
+
+
+def normalize_reasoning_effort(effort: str | None) -> str:
+    value = str(effort or "").strip().lower()
+    if value in REASONING_EFFORT_OPTIONS:
+        return value
+    return "medium"
+
+
+REASONING_EFFORT = normalize_reasoning_effort(REASONING_EFFORT)
 
 SYSTEM_PROMPT = """你是 kagent，一个友好、专业的 AI 助手。
 
