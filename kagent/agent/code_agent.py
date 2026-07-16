@@ -34,7 +34,7 @@ from .risk_policy import tool_policy
 from .patch_recovery import patch_failure_recovery, patch_recovery_prompt
 from .project_memory import format_project_memory_for_prompt, load_or_refresh_project_memory
 from .run_log import RunLogger
-from .symbol_index import find_symbols
+from .symbol_index import find_symbol_contexts, find_symbol_references, find_symbols
 from .task_plan import (
     PlanStatus,
     PlanStep,
@@ -117,16 +117,18 @@ AGENT_WORKFLOW_HINT = """
 Use the workspace tools in this order when it helps:
 1. list_files to inspect the project tree.
 2. search_file to locate symbols, files, or text.
-3. read_file for focused excerpts.
-4. make_directory when a target folder does not exist yet.
-5. rename_path or copy_path when the task is moving, renaming, or duplicating files.
-6. delete_path only when removal is explicitly required.
-7. apply_patch for targeted edits when possible.
-8. write_file only when a full replacement is simpler.
-9. run_command to validate after edits.
-10. list_rollback_history when the user asks what can be undone.
-11. preview_rollback_change, preview_rollback_session, or preview_rollback_paths when the user wants to inspect rollback diffs before applying them.
-12. rollback_last_change, rollback_change, or rollback_paths when the user explicitly asks to undo workspace changes in this chat session.
+3. find_symbol_context when you know a class, function, method, or import name and need its focused source context.
+4. find_symbol_references before changing a known symbol to inspect callers, imports, and tests.
+5. read_file for focused excerpts when symbol context is not enough.
+6. make_directory when a target folder does not exist yet.
+7. rename_path or copy_path when the task is moving, renaming, or duplicating files.
+8. delete_path only when removal is explicitly required.
+9. apply_patch for targeted edits when possible.
+10. write_file only when a full replacement is simpler.
+11. run_command to validate after edits.
+12. list_rollback_history when the user asks what can be undone.
+13. preview_rollback_change, preview_rollback_session, or preview_rollback_paths when the user wants to inspect rollback diffs before applying them.
+14. rollback_last_change, rollback_change, or rollback_paths when the user explicitly asks to undo workspace changes in this chat session.
 
 Prefer small, reviewable changes. If a command fails, inspect the output and fix the real cause before continuing.
 If the task requires checking files, changing files, renaming paths, or running commands, do not stop after saying what you will do. In the same turn, call the next tool and continue the task.
@@ -150,6 +152,8 @@ class CodeAgent:
         "list_files",
         "search_file",
         "find_symbol",
+        "find_symbol_context",
+        "find_symbol_references",
         "suggest_self_improvements",
         "read_file",
         "list_rollback_history",
@@ -1060,6 +1064,36 @@ class CodeAgent:
                     kind=kind,
                     exact=bool(args.get("exact", True)),
                     limit=int(args.get("limit", 50)),
+                ),
+            }
+        if name == "find_symbol_context":
+            kind = args.get("kind")
+            if kind is not None:
+                kind = str(kind)
+            return {
+                "query": str(args["query"]),
+                "kind": kind,
+                "exact": bool(args.get("exact", True)),
+                "context_lines": int(args.get("context_lines", 6)),
+                "contexts": find_symbol_contexts(
+                    self.workspace.root,
+                    str(args["query"]),
+                    kind=kind,
+                    exact=bool(args.get("exact", True)),
+                    limit=int(args.get("limit", 10)),
+                    context_lines=int(args.get("context_lines", 6)),
+                    max_chars=int(args.get("max_chars", 12000)),
+                ),
+            }
+        if name == "find_symbol_references":
+            return {
+                "query": str(args["query"]),
+                "include_tests": bool(args.get("include_tests", True)),
+                "references": find_symbol_references(
+                    self.workspace.root,
+                    str(args["query"]),
+                    include_tests=bool(args.get("include_tests", True)),
+                    limit=int(args.get("limit", 100)),
                 ),
             }
         if name == "suggest_self_improvements":

@@ -34,6 +34,16 @@ class Symbol:
     module: str | None = None
 
 
+@dataclass(frozen=True)
+class SymbolReference:
+    symbol: str
+    path: str
+    line: int
+    reference_type: str
+    excerpt: str
+    is_test: bool = False
+
+
 def build_symbol_index(root: Path) -> list[Symbol]:
     project_map = build_project_map(root)
     symbols: list[Symbol] = []
@@ -68,6 +78,63 @@ def find_symbols(
     return [symbol_to_dict(symbol) for symbol in matches]
 
 
+def find_symbol_contexts(
+    root: Path,
+    query: str,
+    *,
+    kind: SymbolKind | None = None,
+    exact: bool = True,
+    limit: int = 10,
+    context_lines: int = 6,
+    max_chars: int = 12000,
+) -> list[dict[str, object]]:
+    contexts: list[dict[str, object]] = []
+    matches = find_symbols(root, query, kind=kind, exact=exact, limit=limit)
+    for match in matches:
+        path = root / str(match["path"])
+        context = _symbol_context_from_file(
+            path,
+            symbol=match,
+            context_lines=max(0, int(context_lines)),
+            max_chars=max(1, int(max_chars)),
+        )
+        if context is not None:
+            contexts.append(context)
+    return contexts
+
+
+def find_symbol_references(
+    root: Path,
+    query: str,
+    *,
+    include_tests: bool = True,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    needle = str(query or "").strip()
+    if not needle:
+        return []
+    project_map = build_project_map(root)
+    rel_paths = [*project_map.source_files, *project_map.test_files]
+    if not include_tests:
+        test_set = set(project_map.test_files)
+        rel_paths = [path for path in rel_paths if path not in test_set]
+
+    references: list[SymbolReference] = []
+    seen: set[tuple[str, int, str]] = set()
+    test_set = set(project_map.test_files)
+    for rel_path in rel_paths:
+        path = root / rel_path
+        for reference in _references_from_file(path, rel_path, needle, rel_path in test_set):
+            key = (reference.path, reference.line, reference.reference_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            references.append(reference)
+            if len(references) >= limit:
+                return [reference_to_dict(item) for item in references]
+    return [reference_to_dict(item) for item in references]
+
+
 def symbol_to_dict(symbol: Symbol) -> dict[str, object]:
     return {
         "name": symbol.name,
@@ -77,6 +144,169 @@ def symbol_to_dict(symbol: Symbol) -> dict[str, object]:
         "end_line": symbol.end_line,
         "container": symbol.container,
         "module": symbol.module,
+    }
+
+
+def reference_to_dict(reference: SymbolReference) -> dict[str, object]:
+    return {
+        "symbol": reference.symbol,
+        "path": reference.path,
+        "line": reference.line,
+        "reference_type": reference.reference_type,
+        "excerpt": reference.excerpt,
+        "is_test": reference.is_test,
+    }
+
+
+def _references_from_file(
+    path: Path, rel_path: str, symbol_name: str, is_test: bool
+) -> list[SymbolReference]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if path.suffix.lower() == ".py":
+        try:
+            return _python_references(text, rel_path, symbol_name, is_test)
+        except SyntaxError:
+            return _line_references(text, rel_path, symbol_name, is_test)
+    return _line_references(text, rel_path, symbol_name, is_test)
+
+
+def _python_references(
+    text: str, rel_path: str, symbol_name: str, is_test: bool
+) -> list[SymbolReference]:
+    tree = ast.parse(text)
+    lines = text.splitlines()
+    visitor = _ReferenceVisitor(rel_path, symbol_name, lines, is_test)
+    visitor.visit(tree)
+    return visitor.references
+
+
+class _ReferenceVisitor(ast.NodeVisitor):
+    def __init__(self, rel_path: str, symbol_name: str, lines: list[str], is_test: bool):
+        self.rel_path = rel_path
+        self.symbol_name = symbol_name
+        self.lines = lines
+        self.is_test = is_test
+        self.references: list[SymbolReference] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            parts = alias.name.split(".")
+            if alias.asname == self.symbol_name or self.symbol_name in parts:
+                self._add(node.lineno, "import")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        module_parts = (node.module or "").split(".")
+        for alias in node.names:
+            if alias.name == self.symbol_name or alias.asname == self.symbol_name or self.symbol_name in module_parts:
+                self._add(node.lineno, "import")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if _called_name(node.func) == self.symbol_name:
+            self._add(node.lineno, "call")
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id == self.symbol_name:
+            self._add(node.lineno, "name_reference")
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr == self.symbol_name:
+            self._add(node.lineno, "attribute_reference")
+        self.generic_visit(node)
+
+    def _add(self, line: int, reference_type: str) -> None:
+        self.references.append(
+            SymbolReference(
+                symbol=self.symbol_name,
+                path=self.rel_path,
+                line=line,
+                reference_type=reference_type,
+                excerpt=_line_excerpt(self.lines, line),
+                is_test=self.is_test,
+            )
+        )
+
+
+def _called_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _line_references(
+    text: str, rel_path: str, symbol_name: str, is_test: bool
+) -> list[SymbolReference]:
+    pattern = re.compile(rf"\b{re.escape(symbol_name)}\b")
+    references: list[SymbolReference] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or not pattern.search(line):
+            continue
+        references.append(
+            SymbolReference(
+                symbol=symbol_name,
+                path=rel_path,
+                line=line_no,
+                reference_type=_line_reference_type(stripped, symbol_name),
+                excerpt=stripped[:500],
+                is_test=is_test,
+            )
+        )
+    return references
+
+
+def _line_reference_type(line: str, symbol_name: str) -> str:
+    if line.startswith(("import ", "from ", "use ")) or "#include" in line:
+        return "import"
+    if re.search(rf"\b{re.escape(symbol_name)}\s*\(", line):
+        return "call"
+    if f".{symbol_name}" in line:
+        return "attribute_reference"
+    return "name_reference"
+
+
+def _line_excerpt(lines: list[str], line: int) -> str:
+    if 1 <= line <= len(lines):
+        return lines[line - 1].strip()[:500]
+    return ""
+
+
+def _symbol_context_from_file(
+    path: Path,
+    *,
+    symbol: dict[str, object],
+    context_lines: int,
+    max_chars: int,
+) -> dict[str, object] | None:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    line = max(1, int(symbol.get("line") or 1))
+    symbol_end = int(symbol.get("end_line") or line)
+    start_line = max(1, line - context_lines)
+    end_line = min(len(lines), symbol_end + context_lines)
+    excerpt = "\n".join(lines[start_line - 1:end_line])
+    truncated = False
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[: max(0, max_chars - 30)].rstrip() + "\n... (symbol context clipped)"
+        truncated = True
+    return {
+        **symbol,
+        "start_line": start_line,
+        "end_line": end_line,
+        "symbol_start_line": line,
+        "symbol_end_line": symbol_end,
+        "content": excerpt,
+        "content_chars": len(excerpt),
+        "truncated": truncated,
     }
 
 

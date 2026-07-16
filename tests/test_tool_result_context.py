@@ -141,6 +141,59 @@ def test_find_symbol_result_limits_matches():
     assert compacted["matches_omitted"] == 10
 
 
+def test_find_symbol_context_result_compacts_content():
+    content = "x" * 7000
+    result = {
+        "query": "build_plan",
+        "contexts": [
+            {
+                "name": "build_plan",
+                "kind": "function",
+                "path": "kagent/module.py",
+                "line": 10,
+                "start_line": 8,
+                "symbol_start_line": 10,
+                "symbol_end_line": 12,
+                "content": content,
+            }
+        ],
+    }
+
+    compacted = tool_result_for_model("find_symbol_context", result)
+
+    assert compacted["count"] == 1
+    assert compacted["contexts"][0]["path"] == "kagent/module.py"
+    assert compacted["contexts"][0]["content_chars"] == len(content)
+    assert len(compacted["contexts"][0]["content"]) < len(content)
+    assert compacted["context_compacted"] is True
+
+
+def test_find_symbol_references_result_limits_references_and_counts_tests():
+    result = {
+        "query": "build_plan",
+        "include_tests": True,
+        "references": [
+            {
+                "symbol": "build_plan",
+                "path": f"tests/test_{idx}.py",
+                "line": idx + 1,
+                "reference_type": "call",
+                "excerpt": "build_plan()",
+                "is_test": True,
+            }
+            for idx in range(90)
+        ],
+    }
+
+    compacted = tool_result_for_model("find_symbol_references", result)
+
+    assert compacted["count"] == 90
+    assert compacted["test_reference_count"] == 90
+    assert len(compacted["references"]) == 80
+    assert compacted["references_omitted"] == 10
+    assert compacted["context_compacted"] is True
+
+
 def test_tool_result_for_model_keeps_change_plan():
     compacted = tool_result_for_model(
         "write_file",

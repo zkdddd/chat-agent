@@ -1,4 +1,9 @@
-from kagent.agent.symbol_index import build_symbol_index, find_symbols
+from kagent.agent.symbol_index import (
+    build_symbol_index,
+    find_symbol_contexts,
+    find_symbol_references,
+    find_symbols,
+)
 
 
 def test_build_symbol_index_extracts_python_symbols(tmp_path):
@@ -58,6 +63,101 @@ def test_find_symbols_filters_kind(tmp_path):
 
     assert len(matches) == 1
     assert matches[0]["kind"] == "class"
+
+
+def test_find_symbol_context_returns_focused_excerpt(tmp_path):
+    package = tmp_path / "kagent"
+    package.mkdir()
+    (package / "module.py").write_text(
+        "\n".join(
+            [
+                "def before():",
+                "    pass",
+                "",
+                "def manage_context(value):",
+                "    total = value + 1",
+                "    return total",
+                "",
+                "def after():",
+                "    pass",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    contexts = find_symbol_contexts(
+        tmp_path,
+        "manage_context",
+        kind="function",
+        context_lines=1,
+    )
+
+    assert len(contexts) == 1
+    context = contexts[0]
+    assert context["path"] == "kagent/module.py"
+    assert context["symbol_start_line"] == 4
+    assert context["symbol_end_line"] == 6
+    assert context["start_line"] == 3
+    assert context["end_line"] == 7
+    assert "def manage_context(value):" in context["content"]
+    assert "return total" in context["content"]
+
+
+def test_find_symbol_references_marks_imports_calls_and_tests(tmp_path):
+    package = tmp_path / "kagent"
+    package.mkdir()
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (package / "validation.py").write_text(
+        "def build_validation_plan():\n    return []\n",
+        encoding="utf-8",
+    )
+    (package / "code_agent.py").write_text(
+        "\n".join(
+            [
+                "from kagent.validation import build_validation_plan",
+                "",
+                "def run():",
+                "    return build_validation_plan()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tests / "test_validation.py").write_text(
+        "\n".join(
+            [
+                "from kagent.validation import build_validation_plan",
+                "",
+                "def test_plan():",
+                "    assert build_validation_plan() == []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    references = find_symbol_references(tmp_path, "build_validation_plan")
+    by_path_type = {(item["path"], item["reference_type"]) for item in references}
+
+    assert ("kagent/code_agent.py", "import") in by_path_type
+    assert ("kagent/code_agent.py", "call") in by_path_type
+    assert ("tests/test_validation.py", "import") in by_path_type
+    assert ("tests/test_validation.py", "call") in by_path_type
+    assert any(item["is_test"] for item in references if item["path"] == "tests/test_validation.py")
+
+
+def test_find_symbol_references_can_exclude_tests(tmp_path):
+    package = tmp_path / "kagent"
+    package.mkdir()
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (package / "module.py").write_text("def build_plan():\n    return build_plan\n", encoding="utf-8")
+    (tests / "test_module.py").write_text("def test_build_plan():\n    build_plan()\n", encoding="utf-8")
+
+    references = find_symbol_references(tmp_path, "build_plan", include_tests=False)
+
+    assert references
+    assert all(not item["is_test"] for item in references)
+    assert all(not str(item["path"]).startswith("tests/") for item in references)
 
 
 def test_build_symbol_index_extracts_javascript_and_typescript_symbols(tmp_path):

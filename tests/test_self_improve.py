@@ -49,3 +49,46 @@ def test_suggest_self_improvements_is_available_as_agent_tool(tmp_path):
 
     assert result["ok"] is True
     assert len(result["suggestions"]) <= 2
+
+
+def test_find_symbol_context_is_available_as_agent_tool(tmp_path):
+    tool_names = {item["function"]["name"] for item in tool_schema()}
+    assert "find_symbol_context" in tool_names
+
+    package = tmp_path / "kagent"
+    package.mkdir()
+    (package / "module.py").write_text(
+        "def build_plan():\n    return 'ok'\n",
+        encoding="utf-8",
+    )
+
+    agent = CodeAgent(workspace_root=str(tmp_path), session_id="session-1")
+    result = agent._dispatch_tool(
+        "find_symbol_context",
+        {"query": "build_plan", "kind": "function", "context_lines": 0},
+    )
+
+    assert result["query"] == "build_plan"
+    assert result["contexts"][0]["path"] == "kagent/module.py"
+    assert "def build_plan" in result["contexts"][0]["content"]
+
+
+def test_find_symbol_references_is_available_as_agent_tool(tmp_path):
+    tool_names = {item["function"]["name"] for item in tool_schema()}
+    assert "find_symbol_references" in tool_names
+
+    package = tmp_path / "kagent"
+    package.mkdir()
+    (package / "module.py").write_text(
+        "def build_plan():\n    return 1\n\ndef run():\n    return build_plan()\n",
+        encoding="utf-8",
+    )
+
+    agent = CodeAgent(workspace_root=str(tmp_path), session_id="session-1")
+    result = agent._dispatch_tool(
+        "find_symbol_references",
+        {"query": "build_plan", "include_tests": True},
+    )
+
+    assert result["query"] == "build_plan"
+    assert any(item["reference_type"] == "call" for item in result["references"])

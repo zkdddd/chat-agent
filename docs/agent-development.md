@@ -1,5 +1,46 @@
 # Agent Development Log
 
+## 2026-07-16: Symbol Reference Tool
+
+### What changed
+
+- Added `find_symbol_references` as an Agent tool.
+- Python references are detected with AST visitors and classified as `import`, `call`, `name_reference`, or `attribute_reference`.
+- JavaScript/TypeScript/Go/Rust/Java files use lightweight line scanning for import/call/name/attribute reference hints.
+- Reference results mark whether each hit comes from a test file.
+- Tool result compaction limits large reference lists and reports total references, omitted references, and test reference count.
+- The Agent workflow hint now recommends checking symbol references before changing a known function/class/method.
+
+### Why
+
+`find_symbol_context` helps the Agent read the code it wants to edit. The next step is knowing what depends on that code. Symbol references give the Agent a lightweight impact map before editing, making it easier to choose related tests and avoid breaking callers.
+
+### Verification
+
+```text
+Targeted tests cover Python reference classification, test-file marking, Agent tool dispatch, schema exposure, and compaction.
+```
+
+## 2026-07-16: Symbol Context Tool
+
+### What changed
+
+- Added `find_symbol_context` as an Agent tool.
+- The tool finds class, function, method, import, and language-specific symbols, then returns focused source excerpts around each match.
+- Python symbols use AST `end_lineno` when available, so function and class contexts can include the full symbol body plus nearby lines.
+- Tool result compaction now clips large symbol excerpts while preserving path, line numbers, container, module, and symbol metadata.
+- The Agent workflow hint now recommends `find_symbol_context` before broad file reads when a known symbol is involved.
+
+### Why
+
+The Agent already had symbol search, but it still had to call `read_file` separately to inspect the actual code. Symbol context lookup gives the model precise edit context faster and reduces blind text search or large whole-file reads.
+
+### Verification
+
+```text
+Targeted tests cover symbol context extraction, Agent tool dispatch, schema exposure, and tool-result compaction.
+```
+
 ## 2026-07-16: Rich Edit Change Plans
 
 ### What changed

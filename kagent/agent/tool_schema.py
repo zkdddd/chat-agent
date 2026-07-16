@@ -48,14 +48,51 @@ def tool_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "find_symbol",
-                "description": "Find Python class, function, method, or import definitions by symbol name.",
+                "description": "Find class, function, method, import, or language-specific symbol definitions by symbol name.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Symbol name to find."},
-                        "kind": {"type": "string", "enum": ["class", "function", "method", "import"], "description": "Optional symbol kind filter."},
+                        "kind": {"type": "string", "enum": ["class", "function", "method", "import", "interface", "struct", "enum", "type", "trait", "const"], "description": "Optional symbol kind filter."},
                         "exact": {"type": "boolean", "description": "Whether to require an exact symbol name match. Defaults to true."},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum number of matches."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_symbol_context",
+                "description": "Find symbol definitions and return focused source excerpts around each match. Use before editing a known class/function/method.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Symbol name to find."},
+                        "kind": {"type": "string", "enum": ["class", "function", "method", "import", "interface", "struct", "enum", "type", "trait", "const"], "description": "Optional symbol kind filter."},
+                        "exact": {"type": "boolean", "description": "Whether to require an exact symbol name match. Defaults to true."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum number of symbol contexts."},
+                        "context_lines": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Surrounding lines before and after the symbol."},
+                        "max_chars": {"type": "integer", "minimum": 200, "maximum": 50000, "description": "Maximum characters per returned context."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_symbol_references",
+                "description": "Find files and lines that import, call, or reference a known symbol. Use before changing a function/class to assess impact and related tests.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Symbol name to find references for."},
+                        "include_tests": {"type": "boolean", "description": "Whether to include test files. Defaults to true."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of references."},
                     },
                     "required": ["query"],
                     "additionalProperties": False,

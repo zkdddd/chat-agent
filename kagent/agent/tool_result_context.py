@@ -14,6 +14,9 @@ COMMAND_STREAM_LIMIT = 6000
 SEARCH_MATCH_LIMIT = 20
 LIST_ITEMS_LIMIT = 120
 SYMBOL_MATCH_LIMIT = 50
+SYMBOL_CONTEXT_LIMIT = 10
+SYMBOL_CONTEXT_CONTENT_LIMIT = 6000
+SYMBOL_REFERENCE_LIMIT = 80
 
 
 def tool_result_for_model(name: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -25,6 +28,10 @@ def tool_result_for_model(name: str, result: dict[str, Any]) -> dict[str, Any]:
         compacted = _compact_list_files(result)
     elif name == "find_symbol":
         compacted = _compact_find_symbol(result)
+    elif name == "find_symbol_context":
+        compacted = _compact_find_symbol_context(result)
+    elif name == "find_symbol_references":
+        compacted = _compact_find_symbol_references(result)
     elif name == "run_command":
         compacted = _compact_run_command(result)
     else:
@@ -119,6 +126,67 @@ def _compact_find_symbol(result: dict[str, Any]) -> dict[str, Any]:
     compacted["count"] = len(matches)
     compacted["matches_omitted"] = max(0, len(matches) - SYMBOL_MATCH_LIMIT)
     compacted["context_compacted"] = len(matches) > SYMBOL_MATCH_LIMIT
+    return compacted
+
+
+def _compact_find_symbol_context(result: dict[str, Any]) -> dict[str, Any]:
+    compacted = _copy_keys(result, ["query", "kind", "exact", "context_lines", "ok", "error"])
+    contexts = result.get("contexts") if isinstance(result.get("contexts"), list) else []
+    compacted["contexts"] = [
+        _compact_symbol_context(context)
+        for context in contexts[:SYMBOL_CONTEXT_LIMIT]
+        if isinstance(context, dict)
+    ]
+    compacted["count"] = len(contexts)
+    compacted["contexts_omitted"] = max(0, len(contexts) - SYMBOL_CONTEXT_LIMIT)
+    compacted["context_compacted"] = (
+        len(contexts) > SYMBOL_CONTEXT_LIMIT
+        or any(
+            isinstance(context, dict)
+            and len(str(context.get("content") or "")) > SYMBOL_CONTEXT_CONTENT_LIMIT
+            for context in contexts
+        )
+    )
+    return compacted
+
+
+def _compact_find_symbol_references(result: dict[str, Any]) -> dict[str, Any]:
+    compacted = _copy_keys(result, ["query", "include_tests", "ok", "error"])
+    references = result.get("references") if isinstance(result.get("references"), list) else []
+    compacted["references"] = [
+        _compact_value(reference, text_limit=800)
+        for reference in references[:SYMBOL_REFERENCE_LIMIT]
+        if isinstance(reference, dict)
+    ]
+    compacted["count"] = len(references)
+    compacted["test_reference_count"] = sum(
+        1 for reference in references if isinstance(reference, dict) and reference.get("is_test")
+    )
+    compacted["references_omitted"] = max(0, len(references) - SYMBOL_REFERENCE_LIMIT)
+    compacted["context_compacted"] = len(references) > SYMBOL_REFERENCE_LIMIT
+    return compacted
+
+
+def _compact_symbol_context(context: dict[str, Any]) -> dict[str, Any]:
+    compacted = _copy_keys(
+        context,
+        [
+            "name",
+            "kind",
+            "path",
+            "line",
+            "end_line",
+            "container",
+            "module",
+            "start_line",
+            "symbol_start_line",
+            "symbol_end_line",
+            "truncated",
+        ],
+    )
+    content = str(context.get("content") or "")
+    compacted["content"] = _clip_middle(content, SYMBOL_CONTEXT_CONTENT_LIMIT)
+    compacted["content_chars"] = len(content)
     return compacted
 
 
