@@ -67,10 +67,14 @@ def summarize_run_log(path: str | Path) -> dict[str, Any]:
     start = next((event for event in events if event.get("event") == "run_start"), None)
 
     changed_paths: list[str] = []
+    symbol_impacts: list[dict[str, Any]] = []
     if finish and isinstance(finish.get("data"), dict):
         raw_paths = finish["data"].get("changed_paths") or []
         if isinstance(raw_paths, list):
             changed_paths = [str(path) for path in raw_paths]
+        raw_symbol_impacts = finish["data"].get("symbol_impacts") or []
+        if isinstance(raw_symbol_impacts, list):
+            symbol_impacts = [item for item in raw_symbol_impacts if isinstance(item, dict)]
 
     return {
         "path": str(Path(path)),
@@ -86,6 +90,7 @@ def summarize_run_log(path: str | Path) -> dict[str, Any]:
         "tool_call_count": len(tool_events),
         "model_request_count": len(model_request_events),
         "changed_paths": changed_paths,
+        "symbol_impacts": symbol_impacts,
         "validation_failed": bool(_event_data(finish).get("validation_failed")) if finish else False,
         "last_validation_summary": _event_data(finish).get("last_validation_summary") if finish else None,
     }

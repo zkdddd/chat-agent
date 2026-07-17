@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from PyQt6.QtCore import QEvent, Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QFont, QFontMetrics, QKeySequence, QShortcut, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizeGrip,
     QSizePolicy,
     QTextBrowser,
     QTextEdit,
@@ -1111,9 +1112,46 @@ def _diff_review_markdown(preview: dict[str, Any]) -> str:
         lines.append("")
         for path in missing_paths:
             lines.append(f"- `{path}`")
+    symbol_lines = _symbol_impacts_markdown_lines(preview.get("symbol_impacts"))
+    if symbol_lines:
+        lines.append("")
+        lines.append("**Symbol impacts**")
+        lines.append("")
+        lines.extend(symbol_lines)
     if preview_text:
         lines.extend(["", _preview_markdown_block(preview_text)])
     return "\n".join(lines)
+
+
+def _symbol_impacts_markdown_lines(raw_impacts: Any) -> list[str]:
+    impacts = raw_impacts if isinstance(raw_impacts, list) else []
+    lines: list[str] = []
+    for impact in impacts[:6]:
+        if not isinstance(impact, dict):
+            continue
+        symbol = str(impact.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        definition = str(impact.get("definition_path") or "unknown")
+        refs = impact.get("reference_count")
+        tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+        line = f"- `{symbol}` -> `{definition}`"
+        if refs is not None:
+            line += f" | refs: {refs}"
+        if tests:
+            line += " | tests: " + ", ".join(f"`{test}`" for test in tests[:3])
+        lines.append(line)
+    return lines
+
+
+def _symbol_impacts_inline(raw_impacts: Any) -> str:
+    impacts = raw_impacts if isinstance(raw_impacts, list) else []
+    symbols = [
+        str(impact.get("symbol"))
+        for impact in impacts[:3]
+        if isinstance(impact, dict) and impact.get("symbol")
+    ]
+    return ", ".join(symbols)
 
 
 def _resume_task_prompt(context: dict[str, Any]) -> str:
@@ -1441,6 +1479,16 @@ def _tool_event_summary(
     if risk_label:
         policy_prefix = f"[{risk_label}] "
     if isinstance(result, dict):
+        if {"health", "score", "issue_count"} & set(result.keys()):
+            health = str(result.get("health") or "unknown")
+            score = result.get("score")
+            issue_count = result.get("issue_count")
+            parts = [f"health {health}"]
+            if score is not None:
+                parts.append(f"score {score}")
+            if issue_count is not None:
+                parts.append(f"{issue_count} issue(s)")
+            return _single_line(", ".join(parts))
         summary = str(result.get("summary") or "").strip()
         if summary:
             return _single_line(summary)
@@ -2429,6 +2477,7 @@ class ChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("kagent")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.resize(1180, 760)
         self.setMinimumSize(960, 640)
 
@@ -2447,6 +2496,8 @@ class ChatWindow(QMainWindow):
         self._rollback_history_items: list[dict[str, Any]] = []
         self._selected_rollback_id: int | None = None
         self._render_seq = 0
+        self._drag_start_global: QPoint | None = None
+        self._drag_start_frame: QPoint | None = None
         preferences = load_ui_preferences()
         self._selected_model = preferences.get("model") or MODEL
         self._selected_reasoning_effort = normalize_reasoning_effort(
@@ -2465,7 +2516,8 @@ class ChatWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        layout.addWidget(self._build_title_bar())
+        self.title_bar = self._build_title_bar()
+        layout.addWidget(self.title_bar)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(6)
@@ -2503,6 +2555,7 @@ class ChatWindow(QMainWindow):
 
     def _build_title_bar(self) -> QFrame:
         bar = QFrame()
+        bar.setObjectName("windowTitleBar")
         bar.setFixedHeight(46)
         bar.setStyleSheet(
             f"background: rgba(5, 7, 13, 0.96); border-bottom: 1px solid {C_BORDER_SOFT};"
@@ -2539,7 +2592,48 @@ class ChatWindow(QMainWindow):
         h.addLayout(title_stack)
         h.addStretch(1)
 
+        self.minimize_btn = self._window_control_button("-", "Minimize")
+        self.maximize_btn = self._window_control_button("[]", "Maximize")
+        self.close_btn = self._window_control_button("×", "Close", danger=True)
+        self.minimize_btn.clicked.connect(self.showMinimized)
+        self.maximize_btn.clicked.connect(self._toggle_window_maximized)
+        self.close_btn.clicked.connect(self.close)
+        h.addWidget(self.minimize_btn)
+        h.addWidget(self.maximize_btn)
+        h.addWidget(self.close_btn)
+
         return bar
+
+    def _window_control_button(self, text: str, tooltip: str, *, danger: bool = False) -> QPushButton:
+        button = QPushButton(text)
+        button.setFixedSize(32, 28)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        hover = "rgba(248, 113, 113, 0.24)" if danger else "rgba(56, 189, 248, 0.14)"
+        color = "#FCA5A5" if danger else C_TEXT_SUB
+        button.setStyleSheet(
+            "QPushButton {"
+            "background: transparent;"
+            f"color: {color};"
+            "border: none;"
+            "border-radius: 8px;"
+            "font-size: 15px;"
+            "font-weight: 800;"
+            "}"
+            "QPushButton:hover {"
+            f"background: {hover};"
+            f"color: {C_TEXT_MAIN};"
+            "}"
+        )
+        return button
+
+    def _toggle_window_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.maximize_btn.setText("[]")
+        else:
+            self.showMaximized()
+            self.maximize_btn.setText("][")
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -3046,6 +3140,11 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self.status_count.setObjectName("statusText")
         self.status_count.setStyleSheet(f"color: {C_TEXT_SUB}; font-size: 11.5px;")
         h.addWidget(self.status_count)
+
+        grip = QSizeGrip(bar)
+        grip.setFixedSize(14, 14)
+        grip.setStyleSheet(f"background: transparent; color: {C_TEXT_SUB};")
+        h.addWidget(grip)
 
         return bar
 
@@ -3581,6 +3680,9 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         path_label = ", ".join(str(path) for path in paths[:2]) if paths else _t("no_file_details")
         if len(paths) > 2:
             path_label += f" (+{len(paths) - 2})"
+        symbol_label = _symbol_impacts_inline(item.get("symbol_impacts"))
+        if symbol_label:
+            path_label += f"\nSymbols: {symbol_label}"
         return (
             f"#{rollback_id}  {source_tool}  [{status}]\n"
             f"{summary}\n"
@@ -3622,7 +3724,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             list_item = QListWidgetItem(self._format_rollback_list_item(item))
             list_item.setData(Qt.ItemDataRole.UserRole, int(item["rollback_id"]))
             list_item.setToolTip(self._format_rollback_list_item(item))
-            list_item.setSizeHint(QSize(0, 66))
+            list_item.setSizeHint(QSize(0, 82 if item.get("symbol_impacts") else 66))
             self.rollback_list.addItem(list_item)
             if current_id is not None and int(item["rollback_id"]) == int(current_id):
                 selected_row = idx
@@ -3682,7 +3784,9 @@ QScrollBar::add-page, QScrollBar::sub-page {{
                 continue
             path = str(entry.get("path") or "").strip() or f"({_t('unknown_path')})"
             action = _rollback_change_type_label(str(entry.get("action") or ""))
-            file_lines.append(f"- {path} | {action}")
+            symbol_label = _symbol_impacts_inline(entry.get("symbol_impacts"))
+            suffix = f" | symbols: {symbol_label}" if symbol_label else ""
+            file_lines.append(f"- {path} | {action}{suffix}")
         self.rollback_detail_files.setText(
             "\n".join(file_lines) if file_lines else _t("no_file_details")
         )
@@ -3694,6 +3798,11 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             "",
             f"**{_t('summary')}**: {preview.get('summary') or '-'}",
             "",
+            *(
+                ["**Symbol impacts**", "", *_symbol_impacts_markdown_lines(preview.get("symbol_impacts")), ""]
+                if _symbol_impacts_markdown_lines(preview.get("symbol_impacts"))
+                else []
+            ),
             _preview_markdown_block(str(preview.get("preview") or "")),
         ]
         self.rollback_detail_body.setHtml(render("\n".join(md)))
@@ -4046,6 +4155,27 @@ QScrollBar::add-page, QScrollBar::sub-page {{
             status_text = str(event.get("status") or "").strip()
             if status_text:
                 trace.set_state(status_text, kind=str(event.get("kind") or "active"))
+            return
+        if event_type == "project_rules_check":
+            health = str(event.get("health") or "").strip()
+            issue_count = event.get("issue_count")
+            error = health in {"missing", "weak"} or (
+                isinstance(issue_count, int) and issue_count > 0
+            )
+            trace.upsert_event(
+                call_id="project_rules_check",
+                name="KAGENT.md rules",
+                status=_t("tool_status_failed") if error else _t("tool_status_success"),
+                result={
+                    "path": event.get("path") or "KAGENT.md",
+                    "health": health or "unknown",
+                    "score": event.get("score"),
+                    "issue_count": issue_count,
+                    "issues": event.get("issues") if isinstance(event.get("issues"), list) else [],
+                },
+                error=error,
+                approval_pending=False,
+            )
             return
         call_id = str(event.get("call_id") or event.get("id") or "")
         if not call_id:
@@ -5102,6 +5232,51 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         self._refresh_chat_header()
 
     # ==================== Qt ====================
+
+    def _is_title_bar_drag_area(self, position: QPoint) -> bool:
+        if not hasattr(self, "title_bar") or not self.title_bar.geometry().contains(position):
+            return False
+        child = self.childAt(position)
+        return not isinstance(child, QPushButton)
+
+    def mousePressEvent(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._is_title_bar_drag_area(event.position().toPoint())
+        ):
+            self._drag_start_global = event.globalPosition().toPoint()
+            self._drag_start_frame = self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_global is not None and self._drag_start_frame is not None:
+            if self.isMaximized():
+                self.showNormal()
+                self.maximize_btn.setText("[]")
+                self._drag_start_frame = self.frameGeometry().topLeft()
+                self._drag_start_global = event.globalPosition().toPoint()
+            delta = event.globalPosition().toPoint() - self._drag_start_global
+            self.move(self._drag_start_frame + delta)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_global = None
+        self._drag_start_frame = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._is_title_bar_drag_area(event.position().toPoint())
+        ):
+            self._toggle_window_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, e):
         workers: list[AgentWorker] = []

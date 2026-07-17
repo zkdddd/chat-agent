@@ -92,3 +92,26 @@ def test_find_symbol_references_is_available_as_agent_tool(tmp_path):
 
     assert result["query"] == "build_plan"
     assert any(item["reference_type"] == "call" for item in result["references"])
+
+
+def test_symbol_change_plan_is_available_as_agent_tool(tmp_path):
+    tool_names = {item["function"]["name"] for item in tool_schema()}
+    assert "symbol_change_plan" in tool_names
+
+    package = tmp_path / "kagent"
+    package.mkdir()
+    (package / "module.py").write_text(
+        "def build_plan():\n    return 1\n\ndef run():\n    return build_plan()\n",
+        encoding="utf-8",
+    )
+
+    agent = CodeAgent(workspace_root=str(tmp_path), session_id="session-1")
+    result = agent._dispatch_tool(
+        "symbol_change_plan",
+        {"symbol_name": "build_plan", "kind": "function"},
+    )
+
+    assert result["ok"] is True
+    assert result["symbol"] == "build_plan"
+    assert result["primary_definition"]["path"] == "kagent/module.py"
+    assert result["references"]

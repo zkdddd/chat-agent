@@ -194,6 +194,38 @@ def test_find_symbol_references_result_limits_references_and_counts_tests():
     assert compacted["context_compacted"] is True
 
 
+def test_symbol_change_plan_result_compacts_references_and_contexts():
+    result = {
+        "ok": True,
+        "symbol": "build_plan",
+        "definition_count": 1,
+        "primary_definition": {"path": "kagent/module.py", "line": 1},
+        "reference_count": 35,
+        "summary": "Plan symbol change",
+        "risk_summary": "Changing `build_plan` may affect 35 references",
+        "contexts": [
+            {"path": f"kagent/module_{idx}.py", "content": "x" * 7000}
+            for idx in range(5)
+        ],
+        "references": [
+            {"path": f"tests/test_{idx}.py", "line": idx, "is_test": True}
+            for idx in range(35)
+        ],
+        "related_tests": [{"path": "tests/test_module.py"}],
+        "validation_commands": [{"command": "python -m pytest -q tests/test_module.py"}],
+    }
+
+    compacted = tool_result_for_model("symbol_change_plan", result)
+
+    assert compacted["symbol"] == "build_plan"
+    assert len(compacted["contexts"]) == 3
+    assert len(compacted["references"]) == 30
+    assert compacted["contexts_omitted"] == 2
+    assert compacted["references_omitted"] == 5
+    assert compacted["context_compacted"] is True
+    assert compacted["validation_commands"][0]["command"].endswith("tests/test_module.py")
+
+
 def test_tool_result_for_model_keeps_change_plan():
     compacted = tool_result_for_model(
         "write_file",

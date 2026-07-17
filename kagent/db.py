@@ -354,6 +354,14 @@ def get_rollback_entry(session_id: str, entry_id: int) -> dict | None:
         }
 
 
+def update_rollback_entry_payload(entry_id: int, payload: dict) -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            "UPDATE rollback_entries SET payload = ? WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), int(entry_id)),
+        )
+
+
 def list_rollback_entries(
     session_id: str,
     limit: int = 20,

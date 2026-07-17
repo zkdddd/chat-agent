@@ -20,6 +20,7 @@ from kagent.ui.main_window import (
     _tool_event_markdown,
     _t,
     _workspace_button_label,
+    _tool_event_summary,
 )
 
 
@@ -37,6 +38,34 @@ def test_run_debug_markdown_includes_summary_and_self_check(tmp_path, monkeypatc
     assert "自检结果" in markdown
     assert "health: pass" in markdown
     assert "tools: read_file x1" in markdown
+
+
+def test_run_debug_markdown_includes_project_rules_health(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.agent.run_log.STATE_DIR", str(tmp_path))
+    monkeypatch.setattr("kagent.config.APP_LANGUAGE", "en")
+
+    logger = RunLogger(session_id="session-1", workspace_root=str(tmp_path))
+    logger.write(
+        "project_rules_check",
+        {
+            "path": "KAGENT.md",
+            "health": "weak",
+            "score": 40,
+            "issue_count": 2,
+            "issues": [
+                {"kind": "missing_validation_command", "severity": "high"},
+                {"kind": "missing_safety", "severity": "medium"},
+            ],
+        },
+    )
+    logger.finish("completed")
+
+    summary = _run_debug_markdown(str(logger.path), "summary")
+    timeline = _run_debug_markdown(str(logger.path), "timeline")
+
+    assert "project_rules: weak, score 40, 2 issue(s)" in summary
+    assert "Project rules: weak score 40" in timeline
+    assert "high:missing_validation_command, medium:missing_safety" in timeline
 
 
 def test_run_debug_markdown_includes_timeline(tmp_path, monkeypatch):
@@ -371,6 +400,16 @@ def test_tool_options_use_selected_language(monkeypatch):
     assert "Show the diff preview only" in en_actions[0]["prompt"]
     assert "**Status** Running" in en_markdown
     assert "**Input**" in en_markdown
+
+
+def test_tool_event_summary_handles_project_rules_health():
+    summary = _tool_event_summary(
+        "KAGENT.md rules",
+        "Failed",
+        result={"health": "weak", "score": 40, "issue_count": 2},
+    )
+
+    assert summary == "health weak, score 40, 2 issue(s)"
 
 
 def test_session_title_for_workspace_uses_folder_name(tmp_path):

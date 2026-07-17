@@ -17,6 +17,40 @@ def test_preview_rollback_session_lists_active_paths(tmp_path, monkeypatch):
     assert "a.txt" in preview["preview"]
 
 
+def test_rollback_previews_include_symbol_impacts(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    workspace = WorkspaceTools(root=tmp_path, session_id="session-1")
+    package = tmp_path / "kagent" / "agent"
+    package.mkdir(parents=True)
+    target = package / "validation.py"
+    target.write_text("def build_validation_plan():\n    return []\n", encoding="utf-8")
+
+    result = workspace.write_file(
+        "kagent/agent/validation.py",
+        "def build_validation_plan():\n    return ['ok']\n",
+    )
+    workspace.annotate_rollback_symbol_impacts(
+        result["rollback_id"],
+        [
+            {
+                "symbol": "build_validation_plan",
+                "definition_path": "kagent/agent/validation.py",
+                "reference_count": 12,
+                "related_tests": ["tests/test_validation.py"],
+            }
+        ],
+    )
+
+    history = workspace.list_rollback_history()
+    session_preview = workspace.preview_rollback_session()
+    change_preview = workspace.preview_rollback_change(result["rollback_id"])
+
+    assert history["entries"][0]["symbol_impacts"][0]["symbol"] == "build_validation_plan"
+    assert session_preview["symbol_impacts"][0]["definition_path"] == "kagent/agent/validation.py"
+    assert change_preview["symbol_impacts"][0]["related_tests"] == ["tests/test_validation.py"]
+    assert change_preview["diff_entries"][0]["symbol_impacts"][0]["symbol"] == "build_validation_plan"
+
+
 def test_rollback_paths_restores_only_selected_file(tmp_path, monkeypatch):
     _setup_db(tmp_path, monkeypatch)
     workspace = WorkspaceTools(root=tmp_path, session_id="session-1")

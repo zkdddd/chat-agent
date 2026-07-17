@@ -21,6 +21,7 @@ from ..config import (
     WORKSPACE_ROOT,
 )
 from .self_improve import suggest_self_improvements
+from .project_rules import check_project_rules, generate_project_rules, load_project_rules
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -109,6 +110,15 @@ class WorkspaceTools:
 
     def suggest_self_improvements(self, limit: int = 5) -> dict[str, Any]:
         return suggest_self_improvements(self.root, limit=limit)
+
+    def read_project_rules(self, max_chars: int = 12000) -> dict[str, Any]:
+        return load_project_rules(self.root, max_chars=max_chars)
+
+    def generate_project_rules(self, max_chars: int = 12000) -> dict[str, Any]:
+        return generate_project_rules(self.root, max_chars=max_chars)
+
+    def check_project_rules(self, max_chars: int = 12000) -> dict[str, Any]:
+        return check_project_rules(self.root, max_chars=max_chars)
 
     def _rel(self, path: Path) -> str:
         try:
@@ -229,6 +239,24 @@ class WorkspaceTools:
         except Exception:
             self._cleanup_snapshot_token(snapshot_token)
             raise
+
+    def annotate_rollback_symbol_impacts(
+        self,
+        rollback_id: int | None,
+        symbol_impacts: list[dict[str, Any]],
+    ) -> None:
+        if not self.session_id or rollback_id is None or not symbol_impacts:
+            return
+        entry = db.get_rollback_entry(self.session_id, int(rollback_id))
+        if entry is None:
+            return
+        payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+        payload["symbol_impacts"] = [
+            impact
+            for impact in symbol_impacts[:8]
+            if isinstance(impact, dict) and impact.get("symbol")
+        ]
+        db.update_rollback_entry_payload(int(rollback_id), payload)
 
     def _restore_path_state(
         self,
@@ -946,6 +974,7 @@ class WorkspaceTools:
             else None
         )
 
+        symbol_impacts = self._rollback_symbol_impacts(entry)
         diff_entries: list[dict[str, Any]] = []
         preview_sections: list[str] = [
             f"# rollback #{entry['id']} from {entry['tool_name']}",
@@ -982,6 +1011,7 @@ class WorkspaceTools:
                     "path": section["path"],
                     "action": section["action"],
                     "diff_available": section["diff_available"],
+                    "symbol_impacts": self._rollback_symbol_impacts(entry, paths=[section["path"]]),
                 }
             )
             preview_sections.append("")
@@ -1002,6 +1032,7 @@ class WorkspaceTools:
             "superseded_active_count": superseded_active_count,
             "available": available,
             "diff_entries": diff_entries,
+            "symbol_impacts": symbol_impacts,
             "preview": preview,
             "preview_truncated": preview_truncated,
         }
@@ -1019,9 +1050,29 @@ class WorkspaceTools:
             "superseded_active_count": 0,
             "available": False,
             "diff_entries": [],
+            "symbol_impacts": [],
             "preview_truncated": False,
             "preview": preview,
         }
+
+    @staticmethod
+    def _rollback_symbol_impacts(
+        entry: dict[str, Any],
+        paths: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+        impacts = payload.get("symbol_impacts") if isinstance(payload.get("symbol_impacts"), list) else []
+        if not paths:
+            return [impact for impact in impacts if isinstance(impact, dict)]
+        path_set = {str(path).replace("\\", "/") for path in paths if path}
+        matched: list[dict[str, Any]] = []
+        for impact in impacts:
+            if not isinstance(impact, dict):
+                continue
+            definition_path = str(impact.get("definition_path") or "").replace("\\", "/")
+            if definition_path in path_set:
+                matched.append(impact)
+        return matched
 
     @staticmethod
     def _rollback_entry_paths(entry: dict[str, Any]) -> list[str]:
@@ -1093,6 +1144,7 @@ class WorkspaceTools:
                 selected_state["_source_tool"] = str(entry["tool_name"])
                 selected_state["_created_at"] = str(entry["created_at"])
                 selected_state["_snapshot_token"] = str(snapshot_token) if snapshot_token else ""
+                selected_state["_symbol_impacts"] = self._rollback_symbol_impacts(entry, paths=[rel_path])
                 selected.append(selected_state)
                 selected_paths.add(rel_path)
             if selected_paths == requested:
@@ -1135,6 +1187,7 @@ class WorkspaceTools:
                     "diff_available": section["diff_available"],
                     "rollback_id": state.get("_rollback_id"),
                     "source_tool": state.get("_source_tool"),
+                    "symbol_impacts": state.get("_symbol_impacts") if isinstance(state.get("_symbol_impacts"), list) else [],
                 }
             )
             preview_sections.append("")
@@ -1146,6 +1199,18 @@ class WorkspaceTools:
             max_preview_chars,
         )
         paths = [str(state.get("path")) for state in states if state.get("path")]
+        symbol_impacts = []
+        seen_symbols: set[str] = set()
+        for state in states:
+            impacts = state.get("_symbol_impacts") if isinstance(state.get("_symbol_impacts"), list) else []
+            for impact in impacts:
+                if not isinstance(impact, dict):
+                    continue
+                symbol = str(impact.get("symbol") or "")
+                if symbol in seen_symbols:
+                    continue
+                seen_symbols.add(symbol)
+                symbol_impacts.append(impact)
         return {
             "available": bool(states),
             "paths": paths,
@@ -1154,6 +1219,7 @@ class WorkspaceTools:
             "missing_path_count": len(missing_paths or []),
             "rollback_ids": sorted({int(state["_rollback_id"]) for state in states}),
             "diff_entries": diff_entries,
+            "symbol_impacts": symbol_impacts,
             "preview": preview,
             "preview_truncated": preview_truncated,
             "summary": (
@@ -1186,6 +1252,7 @@ class WorkspaceTools:
                 selected["_source_tool"] = str(entry["tool_name"])
                 selected["_created_at"] = str(entry["created_at"])
                 selected["_snapshot_token"] = str(snapshot_token) if snapshot_token else ""
+                selected["_symbol_impacts"] = self._rollback_symbol_impacts(entry, paths=[rel_path])
                 states.append(selected)
 
         return self._rollback_preview_for_states(
@@ -1244,6 +1311,7 @@ class WorkspaceTools:
                 "available": str(entry["status"]) == "active",
                 "paths": paths,
                 "path_count": len(paths),
+                "symbol_impacts": self._rollback_symbol_impacts(entry),
             }
             items.append(item)
             line = (

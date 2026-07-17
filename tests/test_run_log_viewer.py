@@ -33,6 +33,14 @@ def test_run_log_timeline_extracts_readable_events(tmp_path, monkeypatch):
                 "target_summary": "kagent/context.py",
                 "risk_summary": "risk=low; can change source content",
                 "validation_hint": "Run related tests.",
+                "symbol_impacts": [
+                    {
+                        "symbol": "manage_context",
+                        "definition_path": "kagent/context.py",
+                        "reference_count": 4,
+                        "related_tests": ["tests/test_context.py"],
+                    }
+                ],
             }
         },
     )
@@ -53,6 +61,19 @@ def test_run_log_timeline_extracts_readable_events(tmp_path, monkeypatch):
             "stream": True,
             "has_tools": True,
             "duration_ms": 123,
+        },
+    )
+    logger.write(
+        "project_rules_check",
+        {
+            "path": "KAGENT.md",
+            "health": "needs_attention",
+            "score": 55,
+            "issue_count": 2,
+            "issues": [
+                {"kind": "missing_validation_command", "severity": "high"},
+                {"kind": "missing_safety", "severity": "medium"},
+            ],
         },
     )
     logger.write("tool_call", {"name": "read_file", "args": {"path": "README.md"}})
@@ -76,9 +97,10 @@ def test_run_log_timeline_extracts_readable_events(tmp_path, monkeypatch):
     assert [item["title"] for item in timeline] == [
         "Run started",
         "Phase: planning",
-        "Change plan: patch -> kagent/context.py",
+        "Change plan: patch -> kagent/context.py (symbol: manage_context)",
         "Model request: gpt-5.5/high",
         "Model response: gpt-5.5/high",
+        "Project rules: needs_attention score 55",
         "Tool call: read_file",
         "Tool result: read_file (ok)",
         "Tool result: validation_plan (ok)",
@@ -87,8 +109,9 @@ def test_run_log_timeline_extracts_readable_events(tmp_path, monkeypatch):
     assert timeline[1]["detail"] == "Inspecting files"
     assert timeline[2]["detail"] == "risk=low; can change source content"
     assert timeline[4]["detail"] == "123ms, tools, stream"
-    assert timeline[6]["detail"] == "Read README"
-    assert timeline[7]["detail"].startswith("Run fast syntax checks first")
+    assert timeline[5]["detail"] == "high:missing_validation_command, medium:missing_safety"
+    assert timeline[7]["detail"] == "Read README"
+    assert timeline[8]["detail"].startswith("Run fast syntax checks first")
 
 
 def test_summarize_run_for_display_includes_debugging_signals(tmp_path, monkeypatch):
@@ -124,6 +147,19 @@ def test_summarize_run_for_display_includes_debugging_signals(tmp_path, monkeypa
             "duration_ms": 55,
         },
     )
+    logger.write(
+        "project_rules_check",
+        {
+            "path": "KAGENT.md",
+            "health": "weak",
+            "score": 40,
+            "issue_count": 3,
+            "issues": [
+                {"kind": "missing_validation_command", "severity": "high"},
+                {"kind": "missing_documentation_rule", "severity": "medium"},
+            ],
+        },
+    )
     logger.write("tool_call", {"name": "run_command"})
     logger.write(
         "tool_result",
@@ -139,6 +175,14 @@ def test_summarize_run_for_display_includes_debugging_signals(tmp_path, monkeypa
         "failed",
         {
             "changed_paths": ["kagent/agent/run_log_viewer.py"],
+            "symbol_impacts": [
+                {
+                    "symbol": "run_log_timeline",
+                    "definition_path": "kagent/agent/run_log_viewer.py",
+                    "reference_count": 3,
+                    "related_tests": ["tests/test_run_log_viewer.py"],
+                }
+            ],
             "validation_failed": True,
             "last_validation_summary": "1 failed",
         },
@@ -152,9 +196,13 @@ def test_summarize_run_for_display_includes_debugging_signals(tmp_path, monkeypa
     assert "model_requests: gpt-5.5/high x1, gpt-5.5/no-reasoning fallback x1" in display
     assert "model_fallbacks: 1" in display
     assert "model_errors: gpt-5.5 ValueError: unsupported parameter: reasoning_effort" in display
+    assert "project_rules: weak, score 40, 3 issue(s)" in display
+    assert "high:missing_validation_command; medium:missing_documentation_rule" in display
     assert "failed_tools: run_command (pytest failed)" in display
     assert "validation: failed: 1 failed" in display
     assert "changed_paths: kagent/agent/run_log_viewer.py" in display
+    assert "symbol_impacts: run_log_timeline -> kagent/agent/run_log_viewer.py" in display
+    assert "tests: tests/test_run_log_viewer.py" in display
     assert "loop_warnings: Repeated failed command" in display
     assert "patch_recovery: Read current file context" in display
     assert "failure_focus: 1 target(s)" in display

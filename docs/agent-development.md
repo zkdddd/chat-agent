@@ -1,5 +1,266 @@
 # Agent Development Log
 
+## 2026-07-17: Project Rules Health In UI Debug
+
+### What changed
+
+- Run Debug summary and timeline now surface `KAGENT.md` rule health through the existing run-log markdown helpers.
+- The live Agent trace card now handles `project_rules_check` events and shows a `KAGENT.md rules` entry during a run.
+- Tool/event summaries now compact rule health as `health <status>, score <score>, <n> issue(s)`.
+- Added UI tests for Run Debug project-rule visibility and trace-summary formatting.
+
+### Why
+
+Rule health was already written to run logs, but users should not need to inspect raw JSONL or plain log summaries to know whether the Agent started with a healthy rules file. Surfacing it in Run Debug and the live trace makes project rules visible in normal UI workflow.
+
+### Verification
+
+```text
+Targeted validation passed: 49 tests.
+Full validation passed: 199 tests.
+```
+
+## 2026-07-17: Project Rules Health In Run Logs
+
+### What changed
+
+- Run log timelines now show `project_rules_check` as `Project rules: <health> score <score>`.
+- Timeline details include the top rule issues, such as missing validation commands or missing safety sections.
+- Run log summaries now include `project_rules` health, score, issue count, and top issue kinds.
+- Extended run-log viewer tests to cover project-rule timeline and summary display.
+
+### Why
+
+The Agent now reads, checks, and injects `KAGENT.md` guidance, but users also need to audit whether a run started with healthy project rules. Surfacing rule health in run logs makes the rules system observable and easier to debug from Activity / Run Debug surfaces.
+
+### Verification
+
+```text
+Targeted validation passed: 21 tests.
+Full validation passed: 197 tests.
+```
+
+## 2026-07-17: Automatic Project Rules Health Warnings
+
+### What changed
+
+- Added `format_project_rules_health_for_prompt` to produce compact model guidance from `check_project_rules`.
+- CodeAgent now runs a lightweight `KAGENT.md` health check at startup and injects a warning system message only when rules are missing or incomplete.
+- CodeAgent emits a `project_rules_check` event with health, score, issue count, and top issues for run logs and future UI/debug surfaces.
+- Added tests for prompt formatting, no-op healthy rules, automatic model-message injection, and event emission.
+
+### Why
+
+The previous step made rules checkable, but the Agent still had to choose to call the tool. Automatic health warnings make the rules system part of planning: incomplete project rules become visible before coding starts, while healthy rules stay quiet and do not waste context.
+
+### Verification
+
+```text
+Targeted validation passed: 16 tests.
+Full validation passed: 197 tests.
+```
+
+## 2026-07-17: KAGENT.md Rules Health Check
+
+### What changed
+
+- Added `check_project_rules` in `kagent/agent/project_rules.py`.
+- The checker detects missing `KAGENT.md`, missing required sections, missing concrete validation commands, missing documentation rules, and missing dirty-worktree protection.
+- Added a read-only Agent tool `check_project_rules` through `WorkspaceTools`, `tool_schema`, and `CodeAgent._dispatch_tool`.
+- The checker returns a health status, numeric score, issue list, and suggested additions instead of editing the rules file automatically.
+- Extended project-rules tests to cover missing files, incomplete rules, complete rules, and tool dispatch.
+
+### Why
+
+Reading `KAGENT.md` is useful, but the Agent also needs to know whether the rules file is strong enough to guide real coding work. A health check makes project rules maintainable: future runs can detect missing validation, safety, or documentation guidance before a task drifts.
+
+### Verification
+
+```text
+Targeted validation passed: 15 tests.
+Full validation passed: 196 tests.
+```
+
+## 2026-07-17: KAGENT.md Project Rules System
+
+### What changed
+
+- Added `kagent/agent/project_rules.py` for loading, formatting, clipping, and drafting project-level `KAGENT.md` rules.
+- CodeAgent now automatically injects existing `KAGENT.md` content into model system messages before long-term project memory.
+- Added read-only Agent tools: `read_project_rules` and `generate_project_rules`.
+- The generated rules draft uses project facts, detected validation commands, safety rules, and stable project preferences.
+- Added tests for missing rules, prompt formatting, clipping, draft generation, tool dispatch, and model-message injection.
+
+### Why
+
+Long-term project memory is useful for discovered facts, but a coding Agent also needs explicit project rules: coding style, validation workflow, safety constraints, and user/team preferences. `KAGENT.md` gives the project a durable instruction file similar to `AGENTS.md`, making future Agent runs more stable and easier to explain in a resume or interview.
+
+### Verification
+
+```text
+Targeted validation passed: 12 tests.
+Full validation passed: 193 tests.
+```
+
+## 2026-07-17: Symbol Impact In Diff Review And Rollback
+
+### What changed
+
+- CodeAgent now annotates rollback records with matching `symbol_impacts` after symbol-aware edits.
+- Rollback history, single rollback previews, session diff previews, and path previews can return impacted symbols.
+- Diff Review and rollback detail UI show symbol names alongside changed paths and rollback diffs.
+- Rollback preview diff entries include per-file symbol impact metadata.
+
+### Why
+
+Symbol impact already covered planning, validation, repair, and final summaries. Diff review and rollback were the remaining code-review surfaces. Connecting symbol metadata here makes it clear which function/class a rollbackable change belongs to before reviewing or restoring it.
+
+### Verification
+
+```text
+72 targeted tests passed.
+Full validation passed: 187 tests.
+```
+
+## 2026-07-17: Frameless Desktop Window
+
+### What changed
+
+- The main PyQt window now uses a frameless custom title bar.
+- Added custom minimize, maximize/restore, and close buttons.
+- The custom title bar supports dragging and double-click maximize/restore.
+- Added a bottom-right resize grip so the frameless window can still be resized.
+
+### Why
+
+For portfolio and resume demos, the application should feel closer to a polished desktop product instead of a raw Python window with the default OS frame. Removing the system border while keeping expected window controls improves presentation without changing the Agent core.
+
+### Verification
+
+```text
+Python syntax check passed for kagent/ui/main_window.py.
+UI targeted tests passed: 26 tests.
+Full validation passed: 185 tests.
+```
+
+## 2026-07-17: Resume Project Showcase
+
+### What changed
+
+- Added `docs/resume-project.md` as a resume-ready project showcase.
+- Documented KAgent's positioning, architecture, core workflow, technical highlights, test-development angle, resume bullets, and interview explanation.
+- Linked the showcase from the README so the project can be presented more clearly on GitHub and in interviews.
+
+### Why
+
+The user wants KAgent to be strong enough to replace a RenderDoc automation project on a game test-development resume. A dedicated showcase document makes the engineering value easier to understand: local Coding Agent, symbol-level code intelligence, validation automation, failure repair, rollback, run logs, and task resume.
+
+### Verification
+
+```text
+Documentation-only change.
+```
+
+## 2026-07-17: Symbol Impact Guided Repair
+
+### What changed
+
+- Failure focus can now receive `symbol_impacts`.
+- When a failing test is one of a changed symbol's related tests, the Agent also focuses the changed symbol definition.
+- Failure focus prompts include symbol repair hints, such as which changed symbol the failing test covers.
+- Validation failure prompts now list impacted symbols, definition paths, reference counts, and related tests during repair attempts.
+
+### Why
+
+The Agent could already use symbol impact to plan edits, choose validation, and summarize the run. Repair was still mostly driven by raw failure output. Connecting symbol impact to repair makes failures more targeted: if a related test fails, the Agent is nudged to inspect the changed symbol and its direct test before broad search.
+
+### Verification
+
+```text
+58 targeted tests passed.
+Full validation passed: 185 tests.
+```
+
+## 2026-07-17: Symbol Impact In Final Summaries
+
+### What changed
+
+- Final trust summaries now carry `symbol_impacts`.
+- CodeAgent run-finish payloads include impacted symbols for the changed paths.
+- Final response prompts now tell the model which symbols were impacted, where they are defined, how many references were found, and which related tests were selected.
+- Run-log summaries and display text now include impacted symbol names, definition paths, reference counts, and related tests.
+
+### Why
+
+The Agent could already analyze symbol impact, attach it to change plans, and use it to select validation. The last missing piece was user-facing trust: the final answer and run summary should show that the Agent understood the affected function or class, not just the changed file.
+
+### Verification
+
+```text
+34 targeted tests passed.
+Full validation passed: 181 tests.
+```
+
+## 2026-07-17: Symbol Impact Driven Validation
+
+### What changed
+
+- Validation plans can now receive `symbol_impacts` from recent symbol-aware change plans.
+- Python validation commands place symbol-impact validation after syntax checks and before full-suite validation.
+- Symbol validation commands preserve the impacted symbol name and `related_reason`, so run logs can explain why a test was selected.
+- CodeAgent now passes matching symbol impacts into `build_validation_plan` after content edits.
+
+### Why
+
+The previous step made mutation logs aware of symbol impact, but validation still mostly used changed-file heuristics. This step lets the Agent use symbol-level analysis to choose the most relevant tests first, making coding iterations faster and less blind.
+
+### Verification
+
+```text
+52 targeted tests passed.
+Full validation passed: 179 tests.
+```
+
+## 2026-07-17: Symbol Impact Attached To Change Plans
+
+### What changed
+
+- `AgentRunState` now keeps recent `symbol_change_plan` results during a coding run.
+- Mutation change plans match edited paths against symbol definition paths from recent symbol plans.
+- Matching plans attach `symbol_impacts` with symbol name, kind, definition path, reference count, related tests, validation commands, and risk summary.
+- Run-log timeline titles show the impacted symbol on matching change plans.
+
+### Why
+
+`symbol_change_plan` gave the Agent a focused impact map before editing, but the later mutation log did not show whether that analysis was actually connected to the edit. Attaching symbol impact metadata to `change_plan` links the pre-edit analysis with the real file mutation, making logs easier to audit and making future rollback/test-selection work more precise.
+
+### Verification
+
+```text
+37 targeted tests passed.
+Full validation passed: 178 tests.
+```
+
+## 2026-07-17: Symbol Change Plan Tool
+
+### What changed
+
+- Added `symbol_change_plan` as an Agent tool.
+- The plan combines symbol definitions, focused definition contexts, symbol references, test references, related tests, validation commands, and a risk summary.
+- The tool helps the Agent move from file-level planning toward function/class-level planning before edits.
+- Tool result compaction keeps the primary definition, limited contexts, limited references, related tests, validation commands, summary, and risk metadata.
+- The Agent workflow hint now recommends `symbol_change_plan` before changing a known symbol.
+
+### Why
+
+After adding symbol context and symbol references, the next coding improvement is to connect them into a single edit-planning step. This gives the Agent a compact impact map before changing a function or class, improving targeted edits and test selection.
+
+### Verification
+
+```text
+Targeted tests cover plan generation, missing-symbol behavior, Agent tool dispatch, schema exposure, and compaction.
+```
+
 ## 2026-07-16: Symbol Reference Tool
 
 ### What changed

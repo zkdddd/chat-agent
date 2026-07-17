@@ -26,14 +26,21 @@ from ..llm import (
     runtime_metadata_prompt,
 )
 from .agent_stream import AggregatedAssistantMessage, aggregate_chat_completion_stream
-from .change_plan import build_change_plan
+from .change_plan import build_change_plan, symbol_impacts_for_paths
 from .failure_diagnostics import extract_failure_diagnostics
 from .failure_focus import focus_prompt, focus_targets_from_diagnostics
 from .final_trust import build_final_trust_summary, final_trust_prompt
 from .risk_policy import tool_policy
 from .patch_recovery import patch_failure_recovery, patch_recovery_prompt
 from .project_memory import format_project_memory_for_prompt, load_or_refresh_project_memory
+from .project_rules import (
+    check_project_rules,
+    format_project_rules_for_prompt,
+    format_project_rules_health_for_prompt,
+    load_project_rules,
+)
 from .run_log import RunLogger
+from .symbol_change_plan import build_symbol_change_plan
 from .symbol_index import find_symbol_contexts, find_symbol_references, find_symbols
 from .task_plan import (
     PlanStatus,
@@ -99,6 +106,7 @@ class AgentRunState:
     last_validation_summary: str | None = None
     plan: list[PlanStep] | None = None
     focused_validation_commands: list[dict[str, Any]] | None = None
+    symbol_change_plans: list[dict[str, Any]] | None = None
     tool_call_history: list[dict[str, Any]] | None = None
     failed_tool_count: int = 0
     loop_warning_count: int = 0
@@ -110,6 +118,8 @@ class AgentRunState:
             self.plan = []
         if self.focused_validation_commands is None:
             self.focused_validation_commands = []
+        if self.symbol_change_plans is None:
+            self.symbol_change_plans = []
         if self.tool_call_history is None:
             self.tool_call_history = []
 
@@ -119,16 +129,17 @@ Use the workspace tools in this order when it helps:
 2. search_file to locate symbols, files, or text.
 3. find_symbol_context when you know a class, function, method, or import name and need its focused source context.
 4. find_symbol_references before changing a known symbol to inspect callers, imports, and tests.
-5. read_file for focused excerpts when symbol context is not enough.
-6. make_directory when a target folder does not exist yet.
-7. rename_path or copy_path when the task is moving, renaming, or duplicating files.
-8. delete_path only when removal is explicitly required.
-9. apply_patch for targeted edits when possible.
-10. write_file only when a full replacement is simpler.
-11. run_command to validate after edits.
-12. list_rollback_history when the user asks what can be undone.
-13. preview_rollback_change, preview_rollback_session, or preview_rollback_paths when the user wants to inspect rollback diffs before applying them.
-14. rollback_last_change, rollback_change, or rollback_paths when the user explicitly asks to undo workspace changes in this chat session.
+5. symbol_change_plan before changing a known symbol to combine definition, references, tests, validation, and risk.
+6. read_file for focused excerpts when symbol context is not enough.
+7. make_directory when a target folder does not exist yet.
+8. rename_path or copy_path when the task is moving, renaming, or duplicating files.
+9. delete_path only when removal is explicitly required.
+10. apply_patch for targeted edits when possible.
+11. write_file only when a full replacement is simpler.
+12. run_command to validate after edits.
+13. list_rollback_history when the user asks what can be undone.
+14. preview_rollback_change, preview_rollback_session, or preview_rollback_paths when the user wants to inspect rollback diffs before applying them.
+15. rollback_last_change, rollback_change, or rollback_paths when the user explicitly asks to undo workspace changes in this chat session.
 
 Prefer small, reviewable changes. If a command fails, inspect the output and fix the real cause before continuing.
 If the task requires checking files, changing files, renaming paths, or running commands, do not stop after saying what you will do. In the same turn, call the next tool and continue the task.
@@ -154,7 +165,11 @@ class CodeAgent:
         "find_symbol",
         "find_symbol_context",
         "find_symbol_references",
+        "symbol_change_plan",
         "suggest_self_improvements",
+        "read_project_rules",
+        "generate_project_rules",
+        "check_project_rules",
         "read_file",
         "list_rollback_history",
         "preview_rollback_change",
@@ -472,6 +487,7 @@ class CodeAgent:
             "plan": plan_to_dicts(state.plan or []),
             "plan_snapshot": plan_progress_snapshot(state.plan or []),
             "focused_validation_commands": state.focused_validation_commands or [],
+            "symbol_impacts": CodeAgent._current_symbol_impacts(state),
             "tool_call_history": state.tool_call_history or [],
         }
 
@@ -589,6 +605,14 @@ class CodeAgent:
             last_validation_summary=state.last_validation_summary,
             failed_tool_count=state.failed_tool_count,
             loop_warning_count=state.loop_warning_count,
+            symbol_impacts=self._current_symbol_impacts(state),
+        )
+
+    @staticmethod
+    def _current_symbol_impacts(state: AgentRunState) -> list[dict[str, Any]]:
+        return symbol_impacts_for_paths(
+            sorted(state.changed_paths or []),
+            state.symbol_change_plans or [],
         )
 
     def _final_response_prompt(self, state: AgentRunState) -> str:
@@ -599,17 +623,32 @@ class CodeAgent:
             validation_status = "failed" if state.validation_failed else "passed"
         summary = state.last_validation_summary or "none"
         trust_summary = self._final_trust_summary(state, status="completed")
+        symbol_impacts = self._current_symbol_impacts(state)
+        symbol_lines = []
+        for impact in symbol_impacts[:5]:
+            symbol = impact.get("symbol") or "unknown"
+            definition = impact.get("definition_path") or "unknown"
+            refs = impact.get("reference_count")
+            tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+            line = f"- {symbol} at {definition}"
+            if refs is not None:
+                line += f"; references: {refs}"
+            if tests:
+                line += "; related_tests: " + ", ".join(str(test) for test in tests[:4])
+            symbol_lines.append(line)
+        symbol_text = "\n".join(symbol_lines) if symbol_lines else "- none"
         return (
             "Prepare the final user-facing answer from the actual execution state.\n"
             f"- inspected_project: {state.inspected}\n"
             f"- mutated_workspace: {state.mutated}\n"
             f"- content_changed: {state.content_changed}\n"
             f"- changed_paths: {changed_text}\n"
+            f"- symbol_impacts:\n{symbol_text}\n"
             f"- validation_status: {validation_status}\n"
             f"- last_validation_summary: {summary}\n"
             f"- plan_status: {plan_summary_text(state.plan or [])}\n\n"
             f"{final_trust_prompt(trust_summary)}\n\n"
-            "Keep it concise. State what changed, what validation ran, and any remaining risk. "
+            "Keep it concise. State what changed, what symbol(s) were impacted when available, what validation ran, and any remaining risk. "
             "Do not claim validation passed if validation_status is not passed."
         )
 
@@ -648,6 +687,7 @@ class CodeAgent:
         report_parts: list[str],
         emit: EmitFn | None,
         on_event: EventFn | None,
+        symbol_plans: list[dict[str, Any]] | None = None,
         append_assistant_stub: bool = False,
     ) -> tuple[dict[str, Any], bool, dict[str, Any], str | None]:
         if append_assistant_stub:
@@ -661,6 +701,7 @@ class CodeAgent:
             display_args,
             preview=preview_text,
             policy=policy,
+            symbol_plans=symbol_plans,
         )
         self._emit_event(
             on_event,
@@ -724,6 +765,8 @@ class CodeAgent:
                 result = {"ok": False, "error": str(exc)}
 
         result_ok = self._tool_result_ok(name, result)
+        if result_ok and change_plan:
+            self._annotate_rollback_symbol_impacts(result, change_plan)
         if change_plan:
             result = dict(result)
             result["change_plan"] = change_plan
@@ -769,8 +812,38 @@ class CodeAgent:
                 report_parts=report_parts,
                 emit=emit,
                 on_event=on_event,
+                symbol_plans=symbol_plans,
             )
         return result, result_ok, display_args, preview_text
+
+    def _annotate_rollback_symbol_impacts(
+        self,
+        result: dict[str, Any],
+        change_plan: dict[str, Any],
+    ) -> None:
+        symbol_impacts = (
+            change_plan.get("symbol_impacts")
+            if isinstance(change_plan.get("symbol_impacts"), list)
+            else []
+        )
+        if not symbol_impacts:
+            return
+        rollback_ids: list[int] = []
+        rollback_id = result.get("rollback_id")
+        if rollback_id:
+            rollback_ids.append(int(rollback_id))
+        undo_rollback_id = result.get("undo_rollback_id")
+        if undo_rollback_id:
+            rollback_ids.append(int(undo_rollback_id))
+        nested_results = result.get("results") if isinstance(result.get("results"), list) else []
+        for nested in nested_results:
+            if not isinstance(nested, dict):
+                continue
+            nested_rollback_id = nested.get("rollback_id")
+            if nested_rollback_id:
+                rollback_ids.append(int(nested_rollback_id))
+        for entry_id in rollback_ids:
+            self.workspace.annotate_rollback_symbol_impacts(entry_id, symbol_impacts)
 
     def _recover_failed_patch(
         self,
@@ -783,6 +856,7 @@ class CodeAgent:
         report_parts: list[str],
         emit: EmitFn | None,
         on_event: EventFn | None,
+        symbol_plans: list[dict[str, Any]] | None = None,
     ) -> None:
         recovery = patch_failure_recovery(result, change_plan=change_plan)
         if not recovery:
@@ -815,6 +889,7 @@ class CodeAgent:
                 report_parts=report_parts,
                 emit=emit,
                 on_event=on_event,
+                symbol_plans=symbol_plans,
                 append_assistant_stub=True,
             )
         prompt = patch_recovery_prompt(recovery)
@@ -870,6 +945,7 @@ class CodeAgent:
         report_parts: list[str],
         emit: EmitFn | None,
         on_event: EventFn | None,
+        symbol_plans: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str | None, int]:
         commands = plan.get("commands") if isinstance(plan.get("commands"), list) else []
         if not commands:
@@ -940,8 +1016,15 @@ class CodeAgent:
                     report_parts=report_parts,
                     emit=emit,
                     on_event=on_event,
+                    symbol_plans=symbol_plans,
                 )
-                prompt = focus_prompt(focus_targets)
+                prompt = focus_prompt(
+                    focus_targets,
+                    symbol_impacts=symbol_impacts_for_paths(
+                        sorted(state.changed_paths or []),
+                        symbol_plans or [],
+                    ),
+                )
                 if prompt:
                     messages.append({"role": "system", "content": prompt})
                 self._set_phase(
@@ -972,9 +1055,16 @@ class CodeAgent:
         report_parts: list[str],
         emit: EmitFn | None,
         on_event: EventFn | None,
+        symbol_plans: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         diagnostics = extract_failure_diagnostics(result)
-        targets = focus_targets_from_diagnostics(diagnostics)
+        targets = focus_targets_from_diagnostics(
+            diagnostics,
+            symbol_impacts=symbol_impacts_for_paths(
+                sorted(state.changed_paths or []),
+                symbol_plans or [],
+            ),
+        )
         if not targets:
             return []
 
@@ -1018,6 +1108,7 @@ class CodeAgent:
                 report_parts=report_parts,
                 emit=emit,
                 on_event=on_event,
+                symbol_plans=symbol_plans,
                 append_assistant_stub=True,
             )
             if read_ok:
@@ -1096,9 +1187,33 @@ class CodeAgent:
                     limit=int(args.get("limit", 100)),
                 ),
             }
+        if name == "symbol_change_plan":
+            kind = args.get("kind")
+            if kind is not None:
+                kind = str(kind)
+            return build_symbol_change_plan(
+                self.workspace.root,
+                str(args["symbol_name"]),
+                kind=kind,
+                exact=bool(args.get("exact", True)),
+                context_lines=int(args.get("context_lines", 4)),
+                max_references=int(args.get("max_references", 80)),
+            )
         if name == "suggest_self_improvements":
             return self.workspace.suggest_self_improvements(
                 limit=int(args.get("limit", 5)),
+            )
+        if name == "read_project_rules":
+            return self.workspace.read_project_rules(
+                max_chars=int(args.get("max_chars", 12000)),
+            )
+        if name == "generate_project_rules":
+            return self.workspace.generate_project_rules(
+                max_chars=int(args.get("max_chars", 12000)),
+            )
+        if name == "check_project_rules":
+            return self.workspace.check_project_rules(
+                max_chars=int(args.get("max_chars", 12000)),
             )
         if name == "read_file":
             return self.workspace.read_file(
@@ -1238,6 +1353,19 @@ class CodeAgent:
             project_memory_prompt = format_project_memory_for_prompt(project_memory)
         except Exception as exc:
             project_memory_prompt = f"Long-term project memory is unavailable: {exc}"
+        project_rules_prompt = ""
+        project_rules_health: dict[str, Any] | None = None
+        project_rules_health_prompt = ""
+        try:
+            project_rules_prompt = format_project_rules_for_prompt(
+                load_project_rules(self.workspace.root)
+            )
+            project_rules_health = check_project_rules(self.workspace.root)
+            project_rules_health_prompt = format_project_rules_health_for_prompt(
+                project_rules_health
+            )
+        except Exception as exc:
+            project_rules_prompt = f"Project rules from KAGENT.md are unavailable: {exc}"
         state = AgentRunState(
             changed_paths=set(),
             plan=build_task_plan(
@@ -1246,6 +1374,10 @@ class CodeAgent:
                 requires_code_edit=require_code_inspection,
             ),
         )
+        if project_rules_prompt:
+            messages.append({"role": "system", "content": project_rules_prompt})
+        if project_rules_health_prompt:
+            messages.append({"role": "system", "content": project_rules_health_prompt})
         if project_memory_prompt:
             messages.append({"role": "system", "content": project_memory_prompt})
         messages.append({"role": "system", "content": plan_for_model(state.plan or [])})
@@ -1261,6 +1393,23 @@ class CodeAgent:
                 "run_log_path": str(self.run_logger.path) if self.run_logger else None,
             },
         )
+        if project_rules_health is not None:
+            project_rules_issues = (
+                project_rules_health.get("issues")
+                if isinstance(project_rules_health.get("issues"), list)
+                else []
+            )
+            self._emit_event(
+                on_event,
+                {
+                    "type": "project_rules_check",
+                    "path": project_rules_health.get("path"),
+                    "health": project_rules_health.get("health"),
+                    "score": project_rules_health.get("score"),
+                    "issue_count": project_rules_health.get("issue_count", len(project_rules_issues)),
+                    "issues": project_rules_issues[:6],
+                },
+            )
         self._emit_event(
             on_event,
             {
@@ -1292,6 +1441,10 @@ class CodeAgent:
                     validation_plan = build_validation_plan(
                         changed_paths=state.changed_paths or set(),
                         workspace=self.workspace,
+                        symbol_impacts=symbol_impacts_for_paths(
+                            sorted(state.changed_paths or set()),
+                            state.symbol_change_plans or [],
+                        ),
                     )
                 if not validation_plan_announced:
                     validation_plan_run_seq += 1
@@ -1335,6 +1488,7 @@ class CodeAgent:
                         report_parts=report_parts,
                         emit=emit,
                         on_event=on_event,
+                        symbol_plans=state.symbol_change_plans or [],
                     )
                     state.last_validation_summary = summary
                     if not ok:
@@ -1379,6 +1533,7 @@ class CodeAgent:
                         report_parts=report_parts,
                         emit=emit,
                         on_event=on_event,
+                        symbol_plans=state.symbol_change_plans or [],
                     )
                     state.validated = True
                     state.validation_failed = not ok
@@ -1511,6 +1666,7 @@ class CodeAgent:
                                 plan=validation_plan,
                                 attempt=validation_repair_attempts,
                                 max_attempts=self.MAX_VALIDATION_REPAIR_ROUNDS,
+                                symbol_impacts=self._current_symbol_impacts(state),
                             ),
                         }
                     )
@@ -1607,6 +1763,7 @@ class CodeAgent:
                         report_parts=report_parts,
                         emit=emit,
                         on_event=on_event,
+                        symbol_plans=state.symbol_change_plans or [],
                     )
                     tool_action_emitted = True
                 self._record_tool_loop_guard(
@@ -1619,6 +1776,8 @@ class CodeAgent:
                     on_event=on_event,
                     round_idx=round_idx + 1,
                 )
+                if name == "symbol_change_plan" and result_ok:
+                    state.symbol_change_plans = [result, *(state.symbol_change_plans or [])][:8]
                 if name in self.INSPECTION_TOOLS and result_ok:
                     state.inspected = True
                     self._set_plan_step(

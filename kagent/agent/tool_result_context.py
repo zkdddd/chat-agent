@@ -32,6 +32,8 @@ def tool_result_for_model(name: str, result: dict[str, Any]) -> dict[str, Any]:
         compacted = _compact_find_symbol_context(result)
     elif name == "find_symbol_references":
         compacted = _compact_find_symbol_references(result)
+    elif name == "symbol_change_plan":
+        compacted = _compact_symbol_change_plan(result)
     elif name == "run_command":
         compacted = _compact_run_command(result)
     else:
@@ -164,6 +166,56 @@ def _compact_find_symbol_references(result: dict[str, Any]) -> dict[str, Any]:
     )
     compacted["references_omitted"] = max(0, len(references) - SYMBOL_REFERENCE_LIMIT)
     compacted["context_compacted"] = len(references) > SYMBOL_REFERENCE_LIMIT
+    return compacted
+
+
+def _compact_symbol_change_plan(result: dict[str, Any]) -> dict[str, Any]:
+    compacted = _copy_keys(
+        result,
+        [
+            "ok",
+            "error",
+            "symbol",
+            "kind",
+            "exact",
+            "definition_count",
+            "primary_definition",
+            "reference_count",
+            "summary",
+            "risk_summary",
+        ],
+    )
+    contexts = result.get("contexts") if isinstance(result.get("contexts"), list) else []
+    references = result.get("references") if isinstance(result.get("references"), list) else []
+    related_tests = result.get("related_tests") if isinstance(result.get("related_tests"), list) else []
+    validation_commands = (
+        result.get("validation_commands")
+        if isinstance(result.get("validation_commands"), list)
+        else []
+    )
+    compacted["contexts"] = [
+        _compact_symbol_context(context)
+        for context in contexts[:3]
+        if isinstance(context, dict)
+    ]
+    compacted["references"] = [
+        _compact_value(reference, text_limit=800)
+        for reference in references[:30]
+        if isinstance(reference, dict)
+    ]
+    compacted["related_tests"] = [
+        _compact_value(item, text_limit=800)
+        for item in related_tests[:20]
+        if isinstance(item, dict)
+    ]
+    compacted["validation_commands"] = [
+        _compact_value(item, text_limit=800)
+        for item in validation_commands[:10]
+        if isinstance(item, dict)
+    ]
+    compacted["references_omitted"] = max(0, len(references) - 30)
+    compacted["contexts_omitted"] = max(0, len(contexts) - 3)
+    compacted["context_compacted"] = bool(compacted["references_omitted"] or compacted["contexts_omitted"])
     return compacted
 
 

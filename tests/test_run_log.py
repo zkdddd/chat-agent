@@ -36,6 +36,14 @@ def test_read_and_summarize_run_log(tmp_path, monkeypatch):
         "completed",
         {
             "changed_paths": ["kagent/context.py"],
+            "symbol_impacts": [
+                {
+                    "symbol": "manage_context",
+                    "definition_path": "kagent/context.py",
+                    "reference_count": 4,
+                    "related_tests": ["tests/test_context.py"],
+                }
+            ],
             "validated": True,
             "validation_failed": False,
             "last_validation_summary": "pytest passed",
@@ -55,6 +63,8 @@ def test_read_and_summarize_run_log(tmp_path, monkeypatch):
     assert summary["tool_call_count"] == 1
     assert summary["model_request_count"] == 0
     assert summary["changed_paths"] == ["kagent/context.py"]
+    assert summary["symbol_impacts"][0]["symbol"] == "manage_context"
+    assert summary["symbol_impacts"][0]["related_tests"] == ["tests/test_context.py"]
     assert summary["last_validation_summary"] == "pytest passed"
 
 

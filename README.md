@@ -1,5 +1,9 @@
 # kagent
 
+## Portfolio / Resume
+
+KAgent can be presented as a local desktop Coding Agent and test-development automation assistant. Resume-ready project notes are available at [docs/resume-project.md](docs/resume-project.md).
+
 ## Current Update: Task Resume UI
 
 - Run Debug now includes a `Resume Task` action.
@@ -25,6 +29,19 @@
 - Edit change plans now include intent, target summary, risk summary, and validation hints before mutation tools run.
 - Agent now has `find_symbol_context` for reading focused source excerpts around known symbols before editing.
 - Agent now has `find_symbol_references` for finding imports, calls, references, and test usage before changing a symbol.
+- Agent now has `symbol_change_plan` for summarizing symbol definition, references, related tests, validation commands, and risk before editing.
+- Change plans now attach matching symbol impact summaries when a prior `symbol_change_plan` targets the edited file.
+- Validation plans now prioritize symbol-impact tests and validation commands before falling back to file-level related tests.
+- Final Agent replies and run summaries now include impacted symbol names, definition paths, reference counts, and related tests when available.
+- Validation failure recovery now uses symbol impacts to focus repair prompts and read the changed symbol definition when related tests fail.
+- Diff review and rollback history now show symbol impacts for rollbackable changes when available.
+- Agent now supports project-level `KAGENT.md` rules that are automatically injected into coding runs.
+- Agent now has read-only `read_project_rules` and `generate_project_rules` tools for inspecting or drafting project workflow rules.
+- Agent now has `check_project_rules` to score `KAGENT.md` health and suggest missing validation, safety, documentation, or workflow rules.
+- Agent now automatically injects `KAGENT.md` health warnings into coding runs when project rules are missing or incomplete.
+- Run log summaries and timelines now show `KAGENT.md` rule health, score, and top missing-rule issues.
+- Run Debug and the live Agent trace card now surface `KAGENT.md` rule health without opening raw log files.
+- The desktop window now uses a frameless custom title bar with drag, double-click maximize, window controls, and a resize grip.
 - Windows launch scripts prefer the project `.venv` instead of a hardcoded local Python path.
 - UI option labels, dialogs, tool cards, rollback actions, diff review, and task resume text now follow the selected app language.
 - Each chat session can now target its own workspace/project directory from the UI.
@@ -104,6 +121,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - Agent 在执行写入、补丁、删除、回滚等变更工具前，会记录更完整的编辑计划，包括修改意图、目标文件、风险摘要和验证建议。
 - Agent 支持 `find_symbol_context`，可以按函数、类、方法、import 等符号名读取精准代码片段，减少盲目全文搜索和整文件读取。
 - Agent 支持 `find_symbol_references`，可以在修改函数或类之前查找 import、调用、普通引用和测试引用，帮助判断影响范围。
+- Agent 支持 `symbol_change_plan`，可以在修改符号前汇总定义位置、引用位置、相关测试、建议验证命令和风险摘要。
 - Agent 会压缩喂给模型的工具输出，避免大文件、大目录和长命令输出撑爆上下文。
 - Agent 支持长期项目记忆，会按工作区保存项目结构摘要、入口文件、配置文件、常用验证命令和稳定偏好，下次运行自动注入上下文。
 - Agent 会给工具失败结果附带恢复建议，例如路径不存在、参数错误、缺依赖、命令超时、代码错误等。
@@ -128,6 +146,14 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 ```
 
 这个工具只生成建议，不会自动修改文件。建议确认后，再让 Agent 选择其中一个小任务执行。
+
+项目规则：
+
+```text
+KAGENT.md
+```
+
+代码 Agent 运行时会自动读取工作区根目录的 `KAGENT.md`，并把其中的编码规范、验证命令、安全要求和工作流偏好注入到模型上下文。Agent 也会在规则缺失或不完整时自动注入轻量健康提醒，但不会擅自修改规则文件。只读工具 `read_project_rules`、`generate_project_rules` 和 `check_project_rules` 可以检查当前规则、生成规则草稿，或评估规则文件是否缺少验证、安全、文档、工作流要求。
 
 模型切换：
 

@@ -22,6 +22,7 @@ def build_change_plan(
     *,
     preview: str | None = None,
     policy: dict[str, Any] | None = None,
+    symbol_plans: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if name not in CHANGE_TOOLS:
         return None
@@ -49,6 +50,11 @@ def build_change_plan(
         "preview_lines": len(preview_text.splitlines()) if preview_text else 0,
         "preview_truncated_for_plan": len(preview_text) > 2000,
     }
+    symbol_impacts = symbol_impacts_for_paths(files, symbol_plans or [])
+    if symbol_impacts:
+        plan["symbol_impacts"] = symbol_impacts
+        symbols = ", ".join(str(item.get("symbol")) for item in symbol_impacts[:3])
+        plan["summary"] += f" Symbol impact: {symbols}."
     if preview_text:
         plan["preview_excerpt"] = _clip(preview_text, 2000)
     return plan
@@ -63,7 +69,68 @@ def change_plan_for_log(plan: dict[str, Any]) -> dict[str, Any]:
         "intent": plan.get("intent"),
         "risk_summary": plan.get("risk_summary"),
         "validation_hint": plan.get("validation_hint"),
+        "symbol_impacts": plan.get("symbol_impacts") if isinstance(plan.get("symbol_impacts"), list) else [],
     }
+
+
+def symbol_impacts_for_paths(
+    paths: list[str], symbol_plans: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    path_set = {str(path).replace("\\", "/") for path in paths if path}
+    if not path_set:
+        return []
+    impacts: list[dict[str, Any]] = []
+    seen_symbols: set[str] = set()
+    for plan in reversed(symbol_plans):
+        if not isinstance(plan, dict) or not plan.get("ok", True):
+            continue
+        symbol = str(plan.get("symbol") or "").strip()
+        if not symbol or symbol in seen_symbols:
+            continue
+        definition_paths = _definition_paths(plan)
+        if not path_set.intersection(definition_paths):
+            continue
+        seen_symbols.add(symbol)
+        related_tests = plan.get("related_tests") if isinstance(plan.get("related_tests"), list) else []
+        validation_commands = (
+            plan.get("validation_commands")
+            if isinstance(plan.get("validation_commands"), list)
+            else []
+        )
+        impacts.append(
+            {
+                "symbol": symbol,
+                "kind": plan.get("kind"),
+                "definition_path": sorted(definition_paths)[0] if definition_paths else None,
+                "reference_count": int(plan.get("reference_count") or 0),
+                "related_tests": [
+                    str(item.get("path"))
+                    for item in related_tests[:8]
+                    if isinstance(item, dict) and item.get("path")
+                ],
+                "validation_commands": [
+                    str(item.get("command"))
+                    for item in validation_commands[:5]
+                    if isinstance(item, dict) and item.get("command")
+                ],
+                "risk_summary": plan.get("risk_summary"),
+            }
+        )
+        if len(impacts) >= 5:
+            break
+    return impacts
+
+
+def _definition_paths(plan: dict[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    primary = plan.get("primary_definition")
+    if isinstance(primary, dict) and primary.get("path"):
+        paths.add(str(primary["path"]).replace("\\", "/"))
+    definitions = plan.get("definitions") if isinstance(plan.get("definitions"), list) else []
+    for item in definitions:
+        if isinstance(item, dict) and item.get("path"):
+            paths.add(str(item["path"]).replace("\\", "/"))
+    return paths
 
 
 def _planned_paths(name: str, args: dict[str, Any]) -> list[str]:

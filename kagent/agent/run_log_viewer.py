@@ -49,6 +49,7 @@ def summarize_run_for_display(path: str | Path) -> str:
     model_requests = _model_request_counts(events)
     model_fallbacks = _model_fallback_count(events)
     model_errors = _model_error_titles(events)
+    project_rules = _latest_project_rules_check(events)
 
     lines = [
         "Run Log Summary",
@@ -75,6 +76,9 @@ def summarize_run_for_display(path: str | Path) -> str:
     if model_errors:
         lines.append("- model_errors: " + "; ".join(model_errors))
 
+    if project_rules:
+        lines.append("- project_rules: " + _project_rules_summary(project_rules))
+
     if failed_tools:
         lines.append("- failed_tools: " + ", ".join(failed_tools))
 
@@ -86,6 +90,10 @@ def summarize_run_for_display(path: str | Path) -> str:
     changed_paths = summary.get("changed_paths") or []
     if changed_paths:
         lines.append("- changed_paths: " + ", ".join(str(path) for path in changed_paths))
+
+    symbol_impacts = summary.get("symbol_impacts") if isinstance(summary.get("symbol_impacts"), list) else []
+    if symbol_impacts:
+        lines.append("- symbol_impacts: " + "; ".join(_symbol_impact_titles(symbol_impacts)))
 
     if warnings:
         lines.append("- loop_warnings: " + "; ".join(warnings))
@@ -215,6 +223,24 @@ def _event_titles(events: list[dict[str, Any]], event_type: str) -> list[str]:
     return titles
 
 
+def _symbol_impact_titles(symbol_impacts: list[dict[str, Any]]) -> list[str]:
+    titles: list[str] = []
+    for impact in symbol_impacts[:5]:
+        if not isinstance(impact, dict):
+            continue
+        symbol = impact.get("symbol") or "unknown"
+        definition = impact.get("definition_path") or "unknown"
+        refs = impact.get("reference_count")
+        tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+        parts = [f"{symbol} -> {definition}"]
+        if refs is not None:
+            parts.append(f"{refs} refs")
+        if tests:
+            parts.append("tests: " + ", ".join(str(test) for test in tests[:3]))
+        titles.append(", ".join(parts))
+    return titles
+
+
 def _timeline_title(event_type: str, data: dict[str, Any]) -> str:
     if event_type == "run_start":
         return "Run started"
@@ -240,6 +266,11 @@ def _timeline_title(event_type: str, data: dict[str, Any]) -> str:
         model = data.get("model") or "unknown"
         error_type = data.get("error_type") or "error"
         return f"Model error: {model} ({error_type})"
+    if event_type == "project_rules_check":
+        health = data.get("health") or "unknown"
+        score = data.get("score")
+        suffix = f" score {score}" if score is not None else ""
+        return f"Project rules: {health}{suffix}"
     if event_type == "validation_plan":
         return "Validation plan"
     if event_type == "focused_validation_plan":
@@ -251,7 +282,12 @@ def _timeline_title(event_type: str, data: dict[str, Any]) -> str:
         if not target:
             paths = plan.get("paths") if isinstance(plan.get("paths"), list) else []
             target = ", ".join(str(path) for path in paths[:3]) if paths else "workspace"
-        return f"Change plan: {operation} -> {target}"
+        symbol_suffix = ""
+        impacts = plan.get("symbol_impacts") if isinstance(plan.get("symbol_impacts"), list) else []
+        symbols = [str(item.get("symbol")) for item in impacts[:2] if isinstance(item, dict) and item.get("symbol")]
+        if symbols:
+            symbol_suffix = f" (symbol: {', '.join(symbols)})"
+        return f"Change plan: {operation} -> {target}{symbol_suffix}"
     if event_type == "tool_loop_warning":
         return "Tool loop warning"
     if event_type == "patch_recovery":
@@ -283,6 +319,18 @@ def _timeline_detail(event_type: str, data: dict[str, Any]) -> str | None:
         return ", ".join(parts) if parts else None
     if event_type == "model_error":
         return _short_text(data.get("error"))
+    if event_type == "project_rules_check":
+        issues = data.get("issues") if isinstance(data.get("issues"), list) else []
+        if not issues:
+            return "No rule issues detected"
+        titles = []
+        for issue in issues[:3]:
+            if not isinstance(issue, dict):
+                continue
+            severity = issue.get("severity") or "unknown"
+            kind = issue.get("kind") or "issue"
+            titles.append(f"{severity}:{kind}")
+        return _short_text(", ".join(titles))
     if event_type == "run_finish":
         return _short_text(data.get("last_validation_summary") or data.get("summary"))
     if event_type == "validation_plan":
@@ -310,6 +358,37 @@ def _timeline_detail(event_type: str, data: dict[str, Any]) -> str | None:
 
 def _format_counts(counts: Counter[str]) -> str:
     return ", ".join(f"{name} x{count}" for name, count in counts.most_common())
+
+
+def _latest_project_rules_check(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") != "project_rules_check":
+            continue
+        data = _event_data(event)
+        return data if data else None
+    return None
+
+
+def _project_rules_summary(data: dict[str, Any]) -> str:
+    health = data.get("health") or "unknown"
+    score = data.get("score")
+    issue_count = data.get("issue_count")
+    parts = [str(health)]
+    if score is not None:
+        parts.append(f"score {score}")
+    if issue_count is not None:
+        parts.append(f"{issue_count} issue(s)")
+    issues = data.get("issues") if isinstance(data.get("issues"), list) else []
+    issue_titles = []
+    for issue in issues[:3]:
+        if not isinstance(issue, dict):
+            continue
+        kind = issue.get("kind") or "issue"
+        severity = issue.get("severity") or "unknown"
+        issue_titles.append(f"{severity}:{kind}")
+    if issue_titles:
+        parts.append("; ".join(issue_titles))
+    return ", ".join(parts)
 
 
 def _short_text(value: Any, limit: int = 160) -> str | None:

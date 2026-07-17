@@ -48,3 +48,28 @@ def test_final_trust_passes_clean_validated_run():
     assert summary["health"] == "pass"
     assert summary["trustworthy"] is True
     assert summary["issues"] == []
+
+
+def test_final_trust_prompt_includes_symbol_impacts():
+    summary = build_final_trust_summary(
+        status="completed",
+        content_changed=True,
+        changed_paths=["kagent/agent/validation.py"],
+        validated=True,
+        validation_failed=False,
+        symbol_impacts=[
+            {
+                "symbol": "build_validation_plan",
+                "definition_path": "kagent/agent/validation.py",
+                "reference_count": 12,
+                "related_tests": ["tests/test_validation.py"],
+            }
+        ],
+    )
+
+    prompt = final_trust_prompt(summary)
+
+    assert summary["symbol_impacts"][0]["symbol"] == "build_validation_plan"
+    assert "symbol_impacts" in prompt
+    assert "build_validation_plan at kagent/agent/validation.py" in prompt
+    assert "tests/test_validation.py" in prompt

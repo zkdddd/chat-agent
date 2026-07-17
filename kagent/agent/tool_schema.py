@@ -102,6 +102,25 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "symbol_change_plan",
+                "description": "Build a symbol-level change plan with definition context, references, related tests, validation commands, and risk summary before editing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_name": {"type": "string", "description": "Function, class, method, import, or other symbol to change."},
+                        "kind": {"type": "string", "enum": ["class", "function", "method", "import", "interface", "struct", "enum", "type", "trait", "const"], "description": "Optional symbol kind filter."},
+                        "exact": {"type": "boolean", "description": "Whether to require an exact symbol name match. Defaults to true."},
+                        "context_lines": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Source context lines around the symbol definition."},
+                        "max_references": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum references to include."},
+                    },
+                    "required": ["symbol_name"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "suggest_self_improvements",
                 "description": (
                     "Analyze this workspace and suggest small, low-risk coding-agent improvements. "
@@ -115,6 +134,72 @@ def tool_schema() -> list[dict[str, Any]]:
                             "minimum": 1,
                             "maximum": 10,
                             "description": "Maximum number of suggestions to return.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_project_rules",
+                "description": (
+                    "Read the workspace KAGENT.md project rules file. "
+                    "Use this when a task may depend on local coding style, validation, safety, or workflow rules."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "max_chars": {
+                            "type": "integer",
+                            "minimum": 500,
+                            "maximum": 50000,
+                            "description": "Maximum characters of KAGENT.md content to return.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_project_rules",
+                "description": (
+                    "Generate a draft KAGENT.md from current project structure, validation commands, and stable preferences. "
+                    "This is read-only and returns draft content; use write_file only after deciding to create or update the file."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "max_chars": {
+                            "type": "integer",
+                            "minimum": 500,
+                            "maximum": 50000,
+                            "description": "Maximum characters of draft KAGENT.md content to return.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_project_rules",
+                "description": (
+                    "Check whether KAGENT.md is present and complete enough for coding-agent work. "
+                    "Returns health score, missing sections, validation/documentation/safety issues, and suggested additions."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "max_chars": {
+                            "type": "integer",
+                            "minimum": 500,
+                            "maximum": 50000,
+                            "description": "Maximum characters of KAGENT.md content to inspect.",
                         },
                     },
                     "additionalProperties": False,

@@ -97,6 +97,45 @@ def test_validation_plan_keeps_related_tests_before_learned_commands(tmp_path, m
     ]
 
 
+def test_validation_plan_uses_symbol_impacts_before_full_validation(tmp_path):
+    (tmp_path / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    package = tmp_path / "kagent" / "agent"
+    package.mkdir(parents=True)
+    (package / "validation.py").write_text("def build_validation_plan(): pass\n", encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_symbol_validation.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    plan = build_validation_plan(
+        changed_paths={"kagent/agent/validation.py"},
+        workspace=StubWorkspace(tmp_path),
+        symbol_impacts=[
+            {
+                "symbol": "build_validation_plan",
+                "definition_path": "kagent/agent/validation.py",
+                "related_tests": ["tests/test_symbol_validation.py"],
+                "validation_commands": [
+                    "python -m pytest -q tests/test_symbol_validation.py"
+                ],
+            }
+        ],
+    )
+
+    labels = [command["label"] for command in plan["commands"]]
+
+    assert labels[:3] == ["Python syntax check", "Related symbol test", "Pytest suite"]
+    assert plan["commands"][1]["symbol"] == "build_validation_plan"
+    assert plan["commands"][1]["related_reason"] == "symbol impact: build_validation_plan"
+    assert "tests/test_symbol_validation.py" in plan["commands"][1]["command"]
+    assert [item["tier"] for item in plan["selection"]["tiers"]] == [
+        "syntax",
+        "symbol_related_tests",
+        "full_validation",
+    ]
+    assert plan["selection"]["tiers"][1]["symbol"] == "build_validation_plan"
+
+
 def test_python_project_prefers_verify_script_when_available(tmp_path):
     (tmp_path / "requirements.txt").write_text("pytest\n", encoding="utf-8")
     scripts = tmp_path / "scripts"
@@ -166,6 +205,25 @@ def test_validation_failure_prompt_includes_attempt_and_summary():
     assert "Failure category:" in prompt
     assert "Repair strategy:" in prompt
     assert "Python syntax check" in prompt
+
+
+def test_validation_failure_prompt_includes_symbol_impacts():
+    prompt = validation_failure_prompt(
+        changed_paths={"kagent/agent/validation.py"},
+        summary="FAILED tests/test_validation.py::test_plan",
+        symbol_impacts=[
+            {
+                "symbol": "build_validation_plan",
+                "definition_path": "kagent/agent/validation.py",
+                "reference_count": 12,
+                "related_tests": ["tests/test_validation.py"],
+            }
+        ],
+    )
+
+    assert "Symbol impact to consider while repairing" in prompt
+    assert "`build_validation_plan` at `kagent/agent/validation.py`" in prompt
+    assert "related tests: tests/test_validation.py" in prompt
 
 
 def test_validation_result_summary_explains_missing_pytest():

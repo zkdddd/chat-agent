@@ -13,6 +13,7 @@ def build_final_trust_summary(
     last_validation_summary: str | None = None,
     failed_tool_count: int = 0,
     loop_warning_count: int = 0,
+    symbol_impacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     issues: list[dict[str, str]] = []
     if status != "completed":
@@ -67,6 +68,7 @@ def build_final_trust_summary(
         "validation_failed": validation_failed,
         "failed_tool_count": failed_tool_count,
         "loop_warning_count": loop_warning_count,
+        "symbol_impacts": symbol_impacts or [],
         "issues": issues,
     }
 
@@ -83,6 +85,22 @@ def final_trust_prompt(summary: dict[str, Any]) -> str:
     changed_paths = summary.get("changed_paths") if isinstance(summary.get("changed_paths"), list) else []
     if changed_paths:
         lines.append("- changed_paths: " + ", ".join(str(path) for path in changed_paths[:12]))
+    symbol_impacts = summary.get("symbol_impacts") if isinstance(summary.get("symbol_impacts"), list) else []
+    if symbol_impacts:
+        lines.append("- symbol_impacts:")
+        for impact in symbol_impacts[:5]:
+            if not isinstance(impact, dict):
+                continue
+            symbol = impact.get("symbol") or "unknown"
+            definition = impact.get("definition_path") or "unknown"
+            refs = impact.get("reference_count")
+            tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+            parts = [f"{symbol} at {definition}"]
+            if refs is not None:
+                parts.append(f"{refs} reference(s)")
+            if tests:
+                parts.append("tests: " + ", ".join(str(test) for test in tests[:4]))
+            lines.append("- " + "; ".join(parts))
     if issues:
         lines.append("- required_disclosures:")
         for issue in issues:

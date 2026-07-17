@@ -20,6 +20,7 @@ def build_validation_plan(
     changed_paths: set[str],
     workspace: Any,
     max_commands: int = MAX_VALIDATION_PLAN_COMMANDS,
+    symbol_impacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     project_type, project_root = _detect_validation_project(changed_paths, workspace.root)
     changed_list = sorted(str(path) for path in changed_paths if path)
@@ -30,6 +31,7 @@ def build_validation_plan(
             project_root=project_root,
             workspace=workspace,
             max_commands=max_commands,
+            symbol_impacts=symbol_impacts,
         )
     elif project_type == "node":
         commands = _node_validation_commands(
@@ -127,6 +129,7 @@ def validation_failure_prompt(
     plan: dict[str, Any] | None = None,
     attempt: int = 1,
     max_attempts: int = 3,
+    symbol_impacts: list[dict[str, Any]] | None = None,
 ) -> str:
     files = ", ".join(sorted(changed_paths)[:8]) if changed_paths else "the changed files"
     detail = f" Last validation summary: {summary}." if summary else ""
@@ -137,12 +140,16 @@ def validation_failure_prompt(
         command_lines = _command_lines(commands)
         if command_lines:
             plan_text = "\nUse the validation plan again after fixing the issue:\n" + "\n".join(command_lines)
+    symbol_text = ""
+    symbol_lines = _symbol_failure_lines(symbol_impacts or [])
+    if symbol_lines:
+        symbol_text = "\nSymbol impact to consider while repairing:\n" + "\n".join(symbol_lines)
     return (
         f"The last validation failed after you changed workspace files.{detail} "
         f"This is repair attempt {attempt} of {max_attempts}. "
         f"{strategy} "
         "Inspect the failure, fix the real issue, and validate again before finishing. "
-        f"Focus on {files}.{plan_text}"
+        f"Focus on {files}.{symbol_text}{plan_text}"
     )
 
 
@@ -203,6 +210,26 @@ def build_focused_validation_commands(
         if len(commands) >= max_commands:
             break
     return commands
+
+
+def _symbol_failure_lines(symbol_impacts: list[dict[str, Any]], max_symbols: int = 5) -> list[str]:
+    lines: list[str] = []
+    for impact in symbol_impacts[:max_symbols]:
+        if not isinstance(impact, dict):
+            continue
+        symbol = str(impact.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        definition = str(impact.get("definition_path") or "unknown")
+        refs = impact.get("reference_count")
+        tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+        line = f"- `{symbol}` at `{definition}`"
+        if refs is not None:
+            line += f"; references: {refs}"
+        if tests:
+            line += "; related tests: " + ", ".join(str(test) for test in tests[:4])
+        lines.append(line)
+    return lines
 
 
 def _candidate_project_roots(changed_paths: set[str], workspace_root: Path) -> list[Path]:
@@ -282,6 +309,7 @@ def _python_validation_commands(
     project_root: Path | None,
     workspace: Any,
     max_commands: int,
+    symbol_impacts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     commands: list[dict[str, Any]] = []
     command_cwd = workspace._rel(project_root) if project_root is not None else "."
@@ -326,6 +354,13 @@ def _python_validation_commands(
         workspace_root=workspace.root,
         cwd=command_cwd,
         max_commands=max(1, max_commands - 2),
+    )
+    commands.extend(
+        _symbol_impact_validation_commands(
+            symbol_impacts or [],
+            cwd=command_cwd,
+            max_commands=max(1, max_commands - 2),
+        )
     )
     commands.extend(related_commands)
     verify_script = _project_verify_command(search_root)
@@ -452,7 +487,7 @@ def _select_validation_commands(
 
     related_limit = max(0, max_commands - len(selected) - 1)
     for command_info in commands:
-        if command_info.get("label") == "Related tests" and related_limit > 0:
+        if command_info.get("label") in {"Related tests", "Related symbol test"} and related_limit > 0:
             add(command_info)
             related_limit -= 1
 
@@ -477,6 +512,8 @@ def _validation_selection(changed_paths: list[str], commands: list[dict[str, Any
             tier = "syntax"
         elif label == "Related tests":
             tier = "related_tests"
+        elif label == "Related symbol test":
+            tier = "symbol_related_tests"
         elif label in {"Project verification", "Pytest suite"}:
             tier = "full_validation"
         elif command_info.get("learned") or str(command_info.get("source") or "") == "learned":
@@ -489,6 +526,7 @@ def _validation_selection(changed_paths: list[str], commands: list[dict[str, Any
                 "reason": command_info.get("reason"),
                 "related_test": command_info.get("related_test"),
                 "related_reason": command_info.get("related_reason"),
+                "symbol": command_info.get("symbol"),
             }
         )
     return {
@@ -496,6 +534,73 @@ def _validation_selection(changed_paths: list[str], commands: list[dict[str, Any
         "changed_paths": changed_paths[:12],
         "tiers": tiers,
     }
+
+
+def _symbol_impact_validation_commands(
+    symbol_impacts: list[dict[str, Any]],
+    *,
+    cwd: str,
+    max_commands: int,
+) -> list[dict[str, Any]]:
+    commands: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for impact in symbol_impacts:
+        if not isinstance(impact, dict):
+            continue
+        symbol = str(impact.get("symbol") or "").strip()
+        validation_commands = (
+            impact.get("validation_commands")
+            if isinstance(impact.get("validation_commands"), list)
+            else []
+        )
+        for command in validation_commands:
+            command_text = str(command or "").strip()
+            if not command_text:
+                continue
+            key = (command_text, cwd)
+            if key in seen:
+                continue
+            seen.add(key)
+            commands.append(
+                {
+                    "label": "Related symbol test",
+                    "reason": f"Run validation suggested by symbol impact `{symbol}`.",
+                    "command": command_text,
+                    "cwd": cwd,
+                    "timeout_ms": 180000,
+                    "symbol": symbol,
+                    "related_reason": f"symbol impact: {symbol}",
+                }
+            )
+            if len(commands) >= max_commands:
+                return commands
+        if validation_commands:
+            continue
+        related_tests = impact.get("related_tests") if isinstance(impact.get("related_tests"), list) else []
+        for test_path in related_tests:
+            path = str(test_path or "").strip()
+            if not path:
+                continue
+            command_text = _shell_command([sys.executable, "-m", "pytest", "-q", path])
+            key = (command_text, cwd)
+            if key in seen:
+                continue
+            seen.add(key)
+            commands.append(
+                {
+                    "label": "Related symbol test",
+                    "reason": f"Run {path} because it covers symbol impact `{symbol}`.",
+                    "command": command_text,
+                    "cwd": cwd,
+                    "timeout_ms": 180000,
+                    "related_test": path,
+                    "related_reason": f"symbol impact: {symbol}",
+                    "symbol": symbol,
+                }
+            )
+            if len(commands) >= max_commands:
+                return commands
+    return commands
 
 
 def _focused_command_for_diagnostic(item: dict[str, Any]) -> str | None:
