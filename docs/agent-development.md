@@ -1,5 +1,25 @@
 # Agent Development Log
 
+## 2026-07-18: Run Review Core
+
+### What changed
+
+- Added `kagent/agent/run_review.py` as a structured analysis layer above raw run logs.
+- Added `build_run_review(run_log_path)` to aggregate run status, workspace, task, changed paths, validation state, failed tools, model request/error metadata, symbol impacts, project-rule health, risk flags, and recommended next steps.
+- Added `format_run_review_markdown(review)` so the same review payload can be exported or shown in future UI panels.
+- Added tests for clean completed runs, risk-heavy runs, symbol-impact extraction, and unfinished logs.
+
+### Why
+
+Run logs, self-checks, model metadata, symbol impacts, and project-rule health were useful but scattered. Run Review Core turns one Agent run into a single reusable quality payload, which can support future bug-report generation, regression-test planning, quality gates, UI review panels, and success-rate analytics.
+
+### Verification
+
+```text
+Targeted validation passed: 3 tests.
+Full validation passed: 202 tests.
+```
+
 ## 2026-07-17: Project Rules Health In UI Debug
 
 ### What changed

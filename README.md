@@ -4,8 +4,12 @@
 
 KAgent can be presented as a local desktop Coding Agent and test-development automation assistant. Resume-ready project notes are available at [docs/resume-project.md](docs/resume-project.md).
 
-## Current Update: Task Resume UI
+## Current Update: Run Review Core
 
+- Added `kagent/agent/run_review.py` as the first structured run-review analysis layer.
+- `build_run_review(run_log_path)` now aggregates run status, workspace, task, changed paths, validation state, failed tools, model request/error metadata, symbol impacts, project-rule health, risk flags, and recommended next steps.
+- `format_run_review_markdown(review)` now formats the structured review into a compact Markdown report for future UI, bug-report, regression-plan, and quality-gate features.
+- Added focused tests for clean runs, validation/model/tool/rule risks, symbol-impact extraction, and unfinished logs.
 - Run Debug now includes a `Resume Task` action.
 - The action builds resume context from the selected run log and submits it to the Agent as the next turn.
 - The chat header now includes a resume-history picker for recent failed, stopped, unverified, or validation-failed runs.
