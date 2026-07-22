@@ -307,3 +307,30 @@ def test_build_run_analytics_flaky_failure_priority_within_run(tmp_path, monkeyp
     assert flaky_map[nodeid]["run_count"] == 3
     assert flaky_map[nodeid]["fail_count"] == 2
     assert flaky_map[nodeid]["pass_count"] == 1
+
+
+def test_build_run_analytics_exposes_per_run_pass_rate_series(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.agent.run_log.STATE_DIR", str(tmp_path))
+    monkeypatch.setattr("kagent.agent.run_history.STATE_DIR", str(tmp_path))
+
+    # Run 1: 1 pass / 0 fail. Run 2: 1 pass / 1 fail. Written oldest-first.
+    log = RunLogger(session_id="s", workspace_root=str(tmp_path))
+    log.write("test_case_result", {"nodeid": "tests/x::test_a", "status": "passed", "duration_ms": 10})
+    log.finish("completed", {"validated": True})
+
+    log = RunLogger(session_id="s", workspace_root=str(tmp_path))
+    log.write("test_case_result", {"nodeid": "tests/x::test_a", "status": "passed", "duration_ms": 10})
+    log.write("test_case_result", {"nodeid": "tests/x::test_b", "status": "failed", "duration_ms": 10})
+    log.finish("completed", {"validated": True})
+
+    analytics = build_run_analytics(limit=50)
+
+    series = analytics["run_pass_rate_series"]
+    # Newest-first: run 2 first, run 1 second.
+    assert len(series) == 2
+    assert series[0]["total"] == 2
+    assert series[0]["passed"] == 1
+    assert series[0]["failed"] == 1
+    assert series[0]["pass_rate"] == 0.5
+    assert series[1]["total"] == 1
+    assert series[1]["pass_rate"] == 1.0

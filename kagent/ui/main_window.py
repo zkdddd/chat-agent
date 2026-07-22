@@ -10,6 +10,7 @@ from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QFont, QFontMetrics, QKeySequence, QShortcut, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -17,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,10 +30,12 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizeGrip,
     QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QTextBrowser,
     QTextEdit,
     QToolButton,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -4865,6 +4869,126 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
         dialog.exec()
 
+def _run_analytics_dashboard_widget(analytics: dict[str, Any], markdown: str) -> QWidget:
+    """Build the Run Analytics dashboard: a pass-rate chart plus flaky and
+    timing-regression tables over already-computed analytics. Falls back to a
+    markdown text view if pyqtgraph is unavailable, so the analytics still open.
+    """
+    try:
+        import pyqtgraph as pg
+    except ImportError:
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setStyleSheet(_text_view_style())
+        view.setHtml(render(markdown))
+        return view
+
+    splitter = QSplitter(Qt.Orientation.Vertical)
+    splitter.setStyleSheet(f"QSplitter::handle {{ background: {C_BORDER_SOFT}; }}")
+
+    chart = pg.PlotWidget()
+    chart.setBackground(C_BG_SURFACE)
+    chart.showGrid(x=True, y=True, alpha=0.15)
+    chart.setLabel("left", "pass rate (%)")
+    chart.setLabel("bottom", "run (oldest -> newest)")
+    series = list(analytics.get("run_pass_rate_series") or [])
+    # rows are newest-first; plot oldest -> newest left to right.
+    ordered = list(reversed(series))
+    if ordered:
+        x = list(range(len(ordered)))
+        y = [round(float(item.get("pass_rate") or 0) * 100, 1) for item in ordered]
+        chart.plot(x, y, pen=pg.mkPen(color=C_ACCENT, width=2), symbol="o", symbolSize=5, symbolBrush=C_ACCENT_2)
+    chart.getPlotItem().setYRange(0, 100)
+    splitter.addWidget(chart)
+
+    splitter.addWidget(_analytics_table(
+        "Flaky tests",
+        ["nodeid", "pass", "fail", "runs", "pass%", "recent", "first fail run"],
+        _flaky_rows(analytics.get("top_flaky_tests")),
+    ))
+    splitter.addWidget(_analytics_table(
+        "Timing regressions",
+        ["nodeid", "current ms", "baseline ms", "ratio", "+delta ms", "trend"],
+        _timing_regression_rows(analytics.get("timing_regressions")),
+    ))
+    splitter.setStretchFactor(0, 3)
+    splitter.setStretchFactor(1, 2)
+    splitter.setStretchFactor(2, 2)
+    return splitter
+
+
+def _analytics_table(title: str, headers: list[str], rows: list[list[str]]) -> QWidget:
+    wrapper = QWidget()
+    wrapper_layout = QVBoxLayout(wrapper)
+    wrapper_layout.setContentsMargins(0, 0, 0, 0)
+    wrapper_layout.setSpacing(6)
+    label = QLabel(title)
+    label.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 12px; font-weight: 700;")
+    wrapper_layout.addWidget(label)
+    table = QTableWidget(len(rows), len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setStyleSheet(
+        f"QTableWidget {{ background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+        f"border: 1px solid {C_BORDER}; gridline-color: {C_BORDER_SOFT}; }}"
+        f"QHeaderView::section {{ background: {C_BG_SURFACE_ALT}; color: {C_TEXT_SUB}; "
+        f"border: none; padding: 4px; font-size: 10px; }}"
+    )
+    for row_idx, row in enumerate(rows):
+        for col_idx, cell in enumerate(row):
+            item = QTableWidgetItem(str(cell))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row_idx, col_idx, item)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    if not rows:
+        table.setRowCount(0)
+    wrapper_layout.addWidget(table, 1)
+    return wrapper
+
+
+def _flaky_rows(items: Any) -> list[list[str]]:
+    rows: list[list[str]] = []
+    if not isinstance(items, list):
+        return rows
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            [
+                str(item.get("nodeid") or ""),
+                str(item.get("pass_count") or 0),
+                str(item.get("fail_count") or 0),
+                str(item.get("run_count") or 0),
+                f"{round(float(item.get('pass_rate') or 0) * 100, 1)}",
+                str(item.get("recent_status") or ""),
+                str(item.get("first_fail_run") or ""),
+            ]
+        )
+    return rows
+
+
+def _timing_regression_rows(items: Any) -> list[list[str]]:
+    rows: list[list[str]] = []
+    if not isinstance(items, list):
+        return rows
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            [
+                str(item.get("nodeid") or ""),
+                str(item.get("current_ms") or 0),
+                str(item.get("baseline_ms") or 0),
+                str(item.get("ratio") or 0) + "x",
+                "+" + str(item.get("delta_ms") or 0),
+                str(item.get("trend") or ""),
+            ]
+        )
+    return rows
+
+
     def _show_run_analytics(self) -> None:
         try:
             analytics = build_run_analytics(limit=80, workspace_root=self._current_workspace_root())
@@ -4885,11 +5009,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{
         title.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 800;")
         layout.addWidget(title)
 
-        view = QTextBrowser()
-        view.setOpenExternalLinks(False)
-        view.setStyleSheet(_text_view_style())
-        view.setHtml(render(markdown))
-        layout.addWidget(view, 1)
+        layout.addWidget(_run_analytics_dashboard_widget(analytics, markdown), 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         back_activity_button = buttons.addButton(

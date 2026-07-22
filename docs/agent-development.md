@@ -2957,6 +2957,49 @@ python -m pytest -q --basetemp C:\tmp\kagent-pytest-all
 
 下一步建议用 pyqtgraph 把 Run Analytics 从 markdown 文本报告升级为可视化看板：`test_duration_trends`/`validation_command_trends` 已返回可绘制的耗时序列，再加 flaky 用例表和 pass-rate 时序曲线；之后可加 JUnit XML 导出供 CI（Jenkins/GitLab）消费，以及 mypy/ruff 工程门。
 
+## 2026-07-22: Run Analytics Visual Dashboard
+
+### 做了什么
+
+- `run_analytics` 新增 `run_pass_rate_series`：在主循环复用已遍历的 `test_case_counts`，顺手记录每 run 的 `run_id`/`ts`/`total`/`passed`/`failed`/`pass_rate`（rows 本身是 newest-first，序列也保持 newest-first），不新增独立分析函数。
+- `_show_run_analytics`（`main_window.py`）把原来的单个 `QTextBrowser.setHtml(markdown)` 替换为 pyqtgraph 看板：垂直 `QSplitter` 三组件——pass-rate 时序折线（x = run 索引，旧→新；y = pass_rate×100）、flaky 用例 `QTableWidget`（nodeid/pass/fail/runs/pass%/recent/首次失败 run）、耗时回归 `QTableWidget`（nodeid/current/baseline/ratio/+delta/trend），全部直接喂 `build_run_analytics(limit=80)` 已返回的 `run_pass_rate_series`/`top_flaky_tests`/`timing_regressions`，零新分析逻辑。
+- pyqtgraph 用延迟 import，缺失时优雅回退到原 `QTextBrowser` markdown 视图，保证看板在任何环境都能打开。
+- `requirements.txt` 新增 `pyqtgraph>=0.13.0`（纯 Python wheel，Qt 原生，已在当前 PyQt6 环境验证 PlotWidget 可用、无 native 依赖坑）。
+
+### 为什么做
+
+- 这是项目此前"最显眼且 5 秒内被识破的可见短板"：flaky/耗时回归/趋势分析算法都已落地，但 Run Analytics 打开就是一篇 markdown 文本（`QTextBrowser.setHtml`），与简历宣称的"测试分析平台"有可见落差。
+- 一轮 5-agent workflow（2 个测试开发招聘视角 + AI portfolio 视角 + 专门质疑看板的红队 + 综合）裁定 do-now：底层数据已足够丰富（flaky 跨 run 历史 + per-nodeid 耗时时序 + timing 回归比率基线），"图表光靠计数器就是涂口红"的警示在此刻不成立，把 markdown 换成真看板是把已沉没的 Step1-3 投资变现成面试官 5 秒能 get 的可视化测试平台。
+- 红队的两点反对意见（零新能力维度、极简依赖仓库加 pyqtgraph 偏重）被采纳为硬约束而非否决：3 组件上限、不加新分析/交互/配色、pyqtgraph 先验证 import 再加、缺失自动回退。
+
+### 影响模块
+
+- `kagent/agent/run_analytics.py`
+- `kagent/ui/main_window.py`
+- `requirements.txt`
+- `tests/test_run_analytics.py`
+- `tests/test_ui_run_debug.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### 验证
+
+已完成针对性验证和全量验证：
+
+```text
+python -m pytest -q tests/test_run_analytics.py tests/test_ui_run_debug.py
+42 passed
+
+python -m pytest -q
+227 passed
+```
+
+> 注：pyqtgraph 0.14 在 pytest 的 offscreen Qt 平台下，构建真实 PlotWidget 后进程退出会 segfault，因此看板 widget 构建用 offscreen 手动冒烟验证（已确认 QSplitter 三组件 + 行数据正确 + 回退路径），pytest 内只测 `_flaky_rows`/`_timing_regression_rows` 纯函数与回退条件，避免崩溃污染全量。
+
+### 后续
+
+下一步建议做 JUnit XML 导出：把 Step1 已解析的 per-test 数据反向导出标准 `<testsuite>` XML + 无头验证 runner，喂 Jenkins/GitLab/Unity-CI，形成"看得见的平台（可视化）+ 接得上的 CI（集成）"组合；之后可加 mypy/ruff 工程门、自动生成未测符号测试脚手架。
+
 ## 当前验证入口
 
 推荐使用：

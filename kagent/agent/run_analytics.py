@@ -51,11 +51,13 @@ def build_run_analytics(
     nodeid_durations: dict[str, list[dict[str, Any]]] = {}
     command_durations: dict[str, list[dict[str, Any]]] = {}
     nodeid_run_statuses: dict[str, list[str]] = {}
+    run_pass_rate_series: list[dict[str, Any]] = []
 
     for row in rows:
         for issue in row.get("issue_codes") or []:
             issue_counts[str(issue)] += 1
         started_at = row.get("started_at")
+        run_id = row.get("run_id")
         events = _safe_read_events(row.get("path"))
         gate_check_counts.update(_gate_check_counts(events))
         failed_tool_counts.update(_failed_tool_counts(events))
@@ -64,6 +66,17 @@ def build_run_analytics(
         test_counts, failed_tests, slow_tests, run_durations = _test_case_counts(events)
         test_status_counts.update(test_counts)
         failed_test_counts.update(failed_tests)
+        run_total = sum(test_counts.values())
+        run_pass_rate_series.append(
+            {
+                "run_id": run_id,
+                "ts": started_at,
+                "total": run_total,
+                "passed": int(test_counts.get("passed", 0)),
+                "failed": int(test_counts.get("failed", 0)) + int(test_counts.get("error", 0)),
+                "pass_rate": _rate(int(test_counts.get("passed", 0)), run_total),
+            }
+        )
         for nodeid, duration_ms in slow_tests.items():
             slowest_tests[nodeid] = max(slowest_tests.get(nodeid, 0), duration_ms)
         for nodeid, info in run_durations.items():
@@ -103,6 +116,7 @@ def build_run_analytics(
         "top_failed_tests": _top_items(failed_test_counts),
         "slowest_tests": _duration_items(slowest_tests),
         "top_flaky_tests": _flaky_tests(nodeid_run_statuses),
+        "run_pass_rate_series": run_pass_rate_series,
         "timing_regressions": _timing_regressions(nodeid_durations),
         "test_duration_trends": _test_duration_trends(nodeid_durations),
         "validation_command_trends": _validation_command_trends(command_durations),
