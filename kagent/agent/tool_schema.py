@@ -143,6 +143,28 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "measure_coverage",
+                "description": (
+                    "Run pytest under coverage and return the real line/branch coverage rate plus a trend and a regression gate. "
+                    "Persists the snapshot to coverage history so subsequent validation plans rank full-suite commands by real coverage. "
+                    "Read-only with respect to project source: it only runs the test suite under coverage and stores a coverage report."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pytest_args": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Extra pytest arguments (defaults to -q).",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "scaffold_test_for_symbol",
                 "description": (
                     "Generate a pytest scaffold (import + placeholder test functions) for an untested symbol, returning the suggested test file path and its content. "

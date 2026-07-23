@@ -14,6 +14,21 @@ from .validation_learning import learned_validation_commands_from_runs
 
 MAX_VALIDATION_PLAN_COMMANDS = 4
 
+# Most recent real coverage line rate (0-1), set after a coverage run. When
+# present, validation ranking rewards full-suite commands proportionally to
+# real coverage instead of a hardcoded label bonus.
+_recent_coverage_rate: float | None = None
+
+
+def set_recent_coverage_rate(rate: float | None) -> None:
+    """Cache the latest measured coverage line rate for validation ranking."""
+    global _recent_coverage_rate
+    _recent_coverage_rate = rate
+
+
+def _coverage_rate_for_ranking() -> float | None:
+    return _recent_coverage_rate
+
 
 def build_validation_plan(
     *,
@@ -511,13 +526,13 @@ def _validation_command_rank(command_info: dict[str, Any]) -> tuple[float, float
     success_rate = _float_metric(command_info.get("success_rate"), default=1.0 if not learned else 0.0)
     failure_rate = _float_metric(command_info.get("failure_rate"), default=0.0)
     avg_duration = _float_metric(command_info.get("avg_duration_ms"), default=240000.0)
+    # Full-suite commands are rewarded proportionally to the real measured
+    # coverage rate when available, instead of a hardcoded label bonus that
+    # did not reflect actual coverage.
     coverage_bonus = 0.0
-    if label == "Project verification":
-        coverage_bonus = 0.18
-    elif label == "Pytest suite":
-        coverage_bonus = 0.14
-    elif learned:
-        coverage_bonus = 0.08
+    real_rate = _coverage_rate_for_ranking()
+    if real_rate is not None and label in {"Project verification", "Pytest suite"}:
+        coverage_bonus = real_rate * 0.18
     speed_score = max(0.0, 1.0 - min(avg_duration, 300000.0) / 300000.0)
     learned_bonus = 0.04 if learned else 0.0
     score = (success_rate * 0.58) + ((1.0 - failure_rate) * 0.22) + (speed_score * 0.12) + coverage_bonus + learned_bonus

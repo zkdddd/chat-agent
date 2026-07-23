@@ -42,6 +42,8 @@ from .project_rules import (
 from .run_log import RunLogger
 from .symbol_change_plan import build_symbol_change_plan
 from .test_gen import find_untested_symbols, generate_test_scaffold
+from .coverage import measure_coverage as _measure_coverage, save_coverage_snapshot, coverage_trend, coverage_regression_gate
+from .validation import set_recent_coverage_rate
 from .symbol_index import find_symbol_contexts, find_symbol_references, find_symbols
 from .task_plan import (
     PlanStatus,
@@ -170,6 +172,7 @@ class CodeAgent:
         "symbol_change_plan",
         "list_untested_symbols",
         "scaffold_test_for_symbol",
+        "measure_coverage",
         "suggest_self_improvements",
         "read_project_rules",
         "generate_project_rules",
@@ -1270,6 +1273,17 @@ class CodeAgent:
                 ),
                 "count_note": "Symbols whose defining source file has no mapped test file.",
             }
+        if name == "measure_coverage":
+            result = _measure_coverage(
+                self.workspace.root,
+                pytest_args=list(args.get("pytest_args") or ["-q"]),
+            )
+            if result is None:
+                return {"ok": False, "error": "coverage could not be measured (no tests or coverage run failed)"}
+            trend = save_coverage_snapshot(self.workspace.root, result)
+            set_recent_coverage_rate(result.get("line_rate"))
+            gate = coverage_regression_gate(trend)
+            return {"ok": True, "coverage": result, "trend": trend, "gate": gate}
         if name == "scaffold_test_for_symbol":
             return generate_test_scaffold(
                 self.workspace.root,

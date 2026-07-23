@@ -3113,6 +3113,50 @@ python -m pytest -q
 
 下一步做真实覆盖率（替换 `validation.py:514-523` 硬编码 coverage_bonus 为真 coverage.py + 趋势 + 回归 gate），再 rag-failure-memory。
 
+## 2026-07-23: Real Coverage Measurement
+
+### 做了什么
+
+- 新增 `kagent/agent/coverage.py`：
+  - `measure_coverage(root)` 用 `coverage run -m pytest` + `coverage json`（写临时文件再读，因 `-o=-` 不支持 stdout）拿真实 line_rate/branch_rate/covered_lines/num_statements/missing_lines；无测试或失败时返回 None 不崩。
+  - `save_coverage_snapshot` 持久化到 `.kagent_state/coverage_history.json`（最多 50 条）；`coverage_trend` 比最近 vs 历史均值；`coverage_regression_gate` 在最近覆盖率比基线低 ≥3% 时判 warn。
+- `validation.py` 修复假指标：`_validation_command_rank` 不再按 label 写死 `+0.18/+0.14/+0.08` 的 `coverage_bonus`，改为按模块级缓存的**真实 line_rate** 给全量/pytest suite 命令加分（`real_rate * 0.18`）；新增 `set_recent_coverage_rate` / `_coverage_rate_for_ranking` 缓存接口。
+- 新增只读 agent 工具 `measure_coverage`：跑 coverage + 存 snapshot + 设缓存 + 返回 `{coverage, trend, gate}`，让 agent 按需触发并把真实覆盖率喂给后续验证排序。
+- `requirements.txt` 加 `coverage>=7.4`。
+
+### 为什么做
+
+- 修一个真实存在的假指标：`validation.py:514-523` 旧 `coverage_bonus` 是写死的标签加分，根本没量真实覆盖率，面试官追问"覆盖率怎么算的"就露馅。换成真 coverage.py 是把假信号变真信号。
+- 闭合测试平台叙事：per-test 遥测 → JUnit 导出 → 真实覆盖率 + 回归 gate，是测试开发岗的标准三件套。
+- 这是双向共享第三步、偏测试开发纵深：测试开发岗看"覆盖率治理 + 回归 gate"，AI 岗看"agent 自我度量"。
+
+### 影响模块
+
+- `kagent/agent/coverage.py`（新增）
+- `kagent/agent/validation.py`
+- `kagent/agent/tool_schema.py`
+- `kagent/agent/code_agent.py`
+- `requirements.txt`
+- `tests/test_coverage.py`（新增）
+- `README.md`
+- `docs/agent-development.md`
+
+### 验证
+
+已完成针对性验证和全量验证：
+
+```text
+python -m pytest -q tests/test_coverage.py
+5 passed
+
+python -m pytest -q
+245 passed
+```
+
+### 后续
+
+下一步做 rag-failure-memory（需先验证 JSONL「符号→失败→修复」三元组语料密度）。
+
 ## 当前验证入口
 
 推荐使用：
