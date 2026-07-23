@@ -121,6 +121,47 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "list_untested_symbols",
+                "description": (
+                    "List production symbols (functions, classes, methods) whose defining source file has no mapped test file — the untested-symbol coverage gap. "
+                    "Read-only: it does not edit files or write tests; use scaffold_test_for_symbol to draft a test, then write_file to save it."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "description": "Maximum number of untested symbols to return.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scaffold_test_for_symbol",
+                "description": (
+                    "Generate a pytest scaffold (import + placeholder test functions) for an untested symbol, returning the suggested test file path and its content. "
+                    "It does not write the file: review the content, then use write_file to save it and run_command to verify it collects."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Source path of the untested symbol, as returned by list_untested_symbols."},
+                        "symbol": {"type": "string", "description": "Symbol name to prioritize in the scaffold."},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "suggest_self_improvements",
                 "description": (
                     "Analyze this workspace and suggest small, low-risk coding-agent improvements. "

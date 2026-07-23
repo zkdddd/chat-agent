@@ -41,6 +41,7 @@ from .project_rules import (
 )
 from .run_log import RunLogger
 from .symbol_change_plan import build_symbol_change_plan
+from .test_gen import find_untested_symbols, generate_test_scaffold
 from .symbol_index import find_symbol_contexts, find_symbol_references, find_symbols
 from .task_plan import (
     PlanStatus,
@@ -167,6 +168,8 @@ class CodeAgent:
         "find_symbol_context",
         "find_symbol_references",
         "symbol_change_plan",
+        "list_untested_symbols",
+        "scaffold_test_for_symbol",
         "suggest_self_improvements",
         "read_project_rules",
         "generate_project_rules",
@@ -1257,6 +1260,23 @@ class CodeAgent:
                 exact=bool(args.get("exact", True)),
                 context_lines=int(args.get("context_lines", 4)),
                 max_references=int(args.get("max_references", 80)),
+            )
+        if name == "list_untested_symbols":
+            return {
+                "ok": True,
+                "untested_symbols": find_untested_symbols(
+                    self.workspace.root,
+                    limit=int(args.get("limit", 100)),
+                ),
+                "count_note": "Symbols whose defining source file has no mapped test file.",
+            }
+        if name == "scaffold_test_for_symbol":
+            return generate_test_scaffold(
+                self.workspace.root,
+                {
+                    "path": str(args.get("path") or ""),
+                    "symbol": str(args.get("symbol") or ""),
+                },
             )
         if name == "suggest_self_improvements":
             return self.workspace.suggest_self_improvements(

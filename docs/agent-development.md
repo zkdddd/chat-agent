@@ -3042,6 +3042,47 @@ python -m pytest -q
 
 下一步可选：真实覆盖率（替换 `validation.py:514-523` 硬编码 coverage_bonus）、测试生成（为 `related_test_count==0` 符号生成 pytest 脚手架）、mypy/ruff 工程门；以及排在这些之后的 rag-failure-memory（需先验证 JSONL「符号→失败→修复」三元组语料密度）。
 
+## 2026-07-23: Test Generation Tools (gentest)
+
+### 做了什么
+
+- 新增 `kagent/agent/test_gen.py`：
+  - `find_untested_symbols(root)` 用 `build_symbol_index` + `project_map.source_to_tests` 做 file-level 覆盖缺口扫描——返回"定义所在源文件没有对应测试文件"的产线函数/类/方法（O(项目大小)，不是 O(符号×引用)），附 `suggested_test_path`。跳过 dunder/私有符号和 `import`/`const` 等不适用 kind。
+  - `generate_test_scaffold(root, symbol_info)` 读源文件 AST，取可测符号，生成 pytest 脚手架：导入被测模块（正确保留 `kagent` 包名、只剥 `src`/`app` 前缀）+ 每个符号一个占位 `def test_x`（带 TODO 提示 + `assert True` 占位，不编造假断言以免虚假信心）+ 建议测试路径。
+- 注册两个只读 agent 工具（`INSPECTION_TOOLS`）：`list_untested_symbols` 列未测符号、`scaffold_test_for_symbol` 生成脚手架内容（不自动写文件，需 `write_file` 保存 + `run_command` 用 `pytest --collect-only` 验证可发现）。
+- 验证回路：脚手架生成后用 `pytest --collect-only` 确认能被发现（见测试），保证不产出废脚手架。
+
+### 为什么做
+
+- 这是「双向共享」第一优先：测试开发岗读作"AI 帮你写测试 / 测试左移"，AI 岗读作"AI 代码生成"，是两个求职方向都打高分的能力。
+- 信号现成：`symbol_change_plan.py:163` 已对单符号算 `related_test_count==0` 并惩罚"有产线引用但零测试"，但该信号从未被全项目暴露或利用。gentest 把它从"惩罚信号"升级为"生产动作"。
+- 设计取舍：脚手架只生成结构 + TODO 占位，不编造具体断言——生成的假断言会带来虚假信心，不如让 Agent/人填真实预期行为。验证回路只验"可被发现"，不验"通过"。
+
+### 影响模块
+
+- `kagent/agent/test_gen.py`（新增）
+- `kagent/agent/tool_schema.py`
+- `kagent/agent/code_agent.py`
+- `tests/test_test_gen.py`（新增）
+- `README.md`
+- `docs/agent-development.md`
+
+### 验证
+
+已完成针对性验证和全量验证：
+
+```text
+python -m pytest -q tests/test_test_gen.py
+5 passed
+
+python -m pytest -q
+240 passed
+```
+
+### 后续
+
+下一步做上下文工程叙事（零代码，把已有 context 压缩/工具输出截断/项目记忆/跨会话摘要重新框成「上下文工程」写进 README+简历），之后真实覆盖率，再 rag-failure-memory。
+
 ## 当前验证入口
 
 推荐使用：
