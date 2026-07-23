@@ -46,7 +46,7 @@ from .. import db
 from ..agent import WorkspaceTools
 from ..agent.project_map import build_project_map, summarize_project_map
 from ..agent.run_analytics import build_run_analytics, format_run_analytics_markdown
-from ..agent.run_history import list_run_history
+from ..agent.run_history import list_run_history, export_latest_run_junit_xml
 from ..agent.run_log_viewer import run_log_timeline, summarize_run_for_display
 from ..agent.run_review import (
     build_run_review,
@@ -158,6 +158,8 @@ UI_TEXT = {
         "activity_analytics_summary": "{runs} 次运行，{problems} 次需要关注",
         "run_analytics_tip": "汇总最近运行的质量门禁、验证失败、未验证变更、失败工具和模型错误趋势。",
         "run_analytics_title": "运行趋势分析",
+        "run_analytics_export_junit": "导出 JUnit XML",
+        "run_junit_exported": "已导出 JUnit XML：{path}",
         "workspace": "工作区",
         "switch_workspace": "切换工作区",
         "select_workspace": "选择工作区",
@@ -421,6 +423,8 @@ UI_TEXT = {
         "activity_analytics_summary": "{runs} run(s), {problems} need attention",
         "run_analytics_tip": "Summarize quality gates, validation failures, unverified changes, failed tools, and model error trends across recent runs.",
         "run_analytics_title": "Run Analytics",
+        "run_analytics_export_junit": "Export JUnit XML",
+        "run_junit_exported": "Exported JUnit XML: {path}",
         "workspace": "Workspace",
         "switch_workspace": "Switch workspace",
         "select_workspace": "Select workspace",
@@ -4869,124 +4873,6 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 
         dialog.exec()
 
-def _run_analytics_dashboard_widget(analytics: dict[str, Any], markdown: str) -> QWidget:
-    """Build the Run Analytics dashboard: a pass-rate chart plus flaky and
-    timing-regression tables over already-computed analytics. Falls back to a
-    markdown text view if pyqtgraph is unavailable, so the analytics still open.
-    """
-    try:
-        import pyqtgraph as pg
-    except ImportError:
-        view = QTextBrowser()
-        view.setOpenExternalLinks(False)
-        view.setStyleSheet(_text_view_style())
-        view.setHtml(render(markdown))
-        return view
-
-    splitter = QSplitter(Qt.Orientation.Vertical)
-    splitter.setStyleSheet(f"QSplitter::handle {{ background: {C_BORDER_SOFT}; }}")
-
-    chart = pg.PlotWidget()
-    chart.setBackground(C_BG_SURFACE)
-    chart.showGrid(x=True, y=True, alpha=0.15)
-    chart.setLabel("left", "pass rate (%)")
-    chart.setLabel("bottom", "run (oldest -> newest)")
-    series = list(analytics.get("run_pass_rate_series") or [])
-    # rows are newest-first; plot oldest -> newest left to right.
-    ordered = list(reversed(series))
-    if ordered:
-        x = list(range(len(ordered)))
-        y = [round(float(item.get("pass_rate") or 0) * 100, 1) for item in ordered]
-        chart.plot(x, y, pen=pg.mkPen(color=C_ACCENT, width=2), symbol="o", symbolSize=5, symbolBrush=C_ACCENT_2)
-    chart.getPlotItem().setYRange(0, 100)
-    splitter.addWidget(chart)
-
-    splitter.addWidget(_analytics_table(
-        "Flaky tests",
-        ["nodeid", "pass", "fail", "runs", "pass%", "recent", "first fail run"],
-        _flaky_rows(analytics.get("top_flaky_tests")),
-    ))
-    splitter.addWidget(_analytics_table(
-        "Timing regressions",
-        ["nodeid", "current ms", "baseline ms", "ratio", "+delta ms", "trend"],
-        _timing_regression_rows(analytics.get("timing_regressions")),
-    ))
-    splitter.setStretchFactor(0, 3)
-    splitter.setStretchFactor(1, 2)
-    splitter.setStretchFactor(2, 2)
-    return splitter
-
-
-def _analytics_table(title: str, headers: list[str], rows: list[list[str]]) -> QWidget:
-    wrapper = QWidget()
-    wrapper_layout = QVBoxLayout(wrapper)
-    wrapper_layout.setContentsMargins(0, 0, 0, 0)
-    wrapper_layout.setSpacing(6)
-    label = QLabel(title)
-    label.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 12px; font-weight: 700;")
-    wrapper_layout.addWidget(label)
-    table = QTableWidget(len(rows), len(headers))
-    table.setHorizontalHeaderLabels(headers)
-    table.verticalHeader().setVisible(False)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setStyleSheet(
-        f"QTableWidget {{ background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
-        f"border: 1px solid {C_BORDER}; gridline-color: {C_BORDER_SOFT}; }}"
-        f"QHeaderView::section {{ background: {C_BG_SURFACE_ALT}; color: {C_TEXT_SUB}; "
-        f"border: none; padding: 4px; font-size: 10px; }}"
-    )
-    for row_idx, row in enumerate(rows):
-        for col_idx, cell in enumerate(row):
-            item = QTableWidgetItem(str(cell))
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(row_idx, col_idx, item)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    if not rows:
-        table.setRowCount(0)
-    wrapper_layout.addWidget(table, 1)
-    return wrapper
-
-
-def _flaky_rows(items: Any) -> list[list[str]]:
-    rows: list[list[str]] = []
-    if not isinstance(items, list):
-        return rows
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        rows.append(
-            [
-                str(item.get("nodeid") or ""),
-                str(item.get("pass_count") or 0),
-                str(item.get("fail_count") or 0),
-                str(item.get("run_count") or 0),
-                f"{round(float(item.get('pass_rate') or 0) * 100, 1)}",
-                str(item.get("recent_status") or ""),
-                str(item.get("first_fail_run") or ""),
-            ]
-        )
-    return rows
-
-
-def _timing_regression_rows(items: Any) -> list[list[str]]:
-    rows: list[list[str]] = []
-    if not isinstance(items, list):
-        return rows
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        rows.append(
-            [
-                str(item.get("nodeid") or ""),
-                str(item.get("current_ms") or 0),
-                str(item.get("baseline_ms") or 0),
-                str(item.get("ratio") or 0) + "x",
-                "+" + str(item.get("delta_ms") or 0),
-                str(item.get("trend") or ""),
-            ]
-        )
-    return rows
 
 
     def _show_run_analytics(self) -> None:
@@ -5012,6 +4898,10 @@ def _timing_regression_rows(items: Any) -> list[list[str]]:
         layout.addWidget(_run_analytics_dashboard_widget(analytics, markdown), 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        export_button = buttons.addButton(
+            _t("run_analytics_export_junit"), QDialogButtonBox.ButtonRole.ActionRole
+        )
+        export_button.clicked.connect(lambda _checked=False: self._export_run_junit_xml())
         back_activity_button = buttons.addButton(
             _t("activity_back_to_activity"), QDialogButtonBox.ButtonRole.ActionRole
         )
@@ -5021,6 +4911,29 @@ def _timing_regression_rows(items: Any) -> list[list[str]]:
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.exec()
+
+    def _export_run_junit_xml(self) -> None:
+        try:
+            xml_text = export_latest_run_junit_xml()
+        except Exception as exc:
+            QMessageBox.warning(self, "kagent", _tf("read_run_log_failed", error=exc))
+            return
+        if not xml_text:
+            QMessageBox.information(self, "kagent", _t("no_resume_history"))
+            return
+
+        default_name = "kagent-run-junit.xml"
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, _t("run_analytics_export_junit"), default_name, "JUnit XML (*.xml)"
+        )
+        if not save_path:
+            return
+        try:
+            Path(save_path).write_text(xml_text, encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "kagent", _tf("read_run_log_failed", error=exc))
+            return
+        QMessageBox.information(self, "kagent", _tf("run_junit_exported", path=save_path))
 
     def _show_current_diff_review(self) -> None:
         workspace = self._workspace_tools_for_session()
@@ -5539,3 +5452,122 @@ def _timing_regression_rows(items: Any) -> list[list[str]]:
             if worker.isRunning():
                 worker.wait(2000)
         super().closeEvent(e)
+
+def _run_analytics_dashboard_widget(analytics: dict[str, Any], markdown: str) -> QWidget:
+    """Build the Run Analytics dashboard: a pass-rate chart plus flaky and
+    timing-regression tables over already-computed analytics. Falls back to a
+    markdown text view if pyqtgraph is unavailable, so the analytics still open.
+    """
+    try:
+        import pyqtgraph as pg
+    except ImportError:
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setStyleSheet(_text_view_style())
+        view.setHtml(render(markdown))
+        return view
+
+    splitter = QSplitter(Qt.Orientation.Vertical)
+    splitter.setStyleSheet(f"QSplitter::handle {{ background: {C_BORDER_SOFT}; }}")
+
+    chart = pg.PlotWidget()
+    chart.setBackground(C_BG_SURFACE)
+    chart.showGrid(x=True, y=True, alpha=0.15)
+    chart.setLabel("left", "pass rate (%)")
+    chart.setLabel("bottom", "run (oldest -> newest)")
+    series = list(analytics.get("run_pass_rate_series") or [])
+    # rows are newest-first; plot oldest -> newest left to right.
+    ordered = list(reversed(series))
+    if ordered:
+        x = list(range(len(ordered)))
+        y = [round(float(item.get("pass_rate") or 0) * 100, 1) for item in ordered]
+        chart.plot(x, y, pen=pg.mkPen(color=C_ACCENT, width=2), symbol="o", symbolSize=5, symbolBrush=C_ACCENT_2)
+    chart.getPlotItem().setYRange(0, 100)
+    splitter.addWidget(chart)
+
+    splitter.addWidget(_analytics_table(
+        "Flaky tests",
+        ["nodeid", "pass", "fail", "runs", "pass%", "recent", "first fail run"],
+        _flaky_rows(analytics.get("top_flaky_tests")),
+    ))
+    splitter.addWidget(_analytics_table(
+        "Timing regressions",
+        ["nodeid", "current ms", "baseline ms", "ratio", "+delta ms", "trend"],
+        _timing_regression_rows(analytics.get("timing_regressions")),
+    ))
+    splitter.setStretchFactor(0, 3)
+    splitter.setStretchFactor(1, 2)
+    splitter.setStretchFactor(2, 2)
+    return splitter
+
+
+def _analytics_table(title: str, headers: list[str], rows: list[list[str]]) -> QWidget:
+    wrapper = QWidget()
+    wrapper_layout = QVBoxLayout(wrapper)
+    wrapper_layout.setContentsMargins(0, 0, 0, 0)
+    wrapper_layout.setSpacing(6)
+    label = QLabel(title)
+    label.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 12px; font-weight: 700;")
+    wrapper_layout.addWidget(label)
+    table = QTableWidget(len(rows), len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setStyleSheet(
+        f"QTableWidget {{ background: {C_BG_SURFACE}; color: {C_TEXT_MAIN}; "
+        f"border: 1px solid {C_BORDER}; gridline-color: {C_BORDER_SOFT}; }}"
+        f"QHeaderView::section {{ background: {C_BG_SURFACE_ALT}; color: {C_TEXT_SUB}; "
+        f"border: none; padding: 4px; font-size: 10px; }}"
+    )
+    for row_idx, row in enumerate(rows):
+        for col_idx, cell in enumerate(row):
+            item = QTableWidgetItem(str(cell))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row_idx, col_idx, item)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    if not rows:
+        table.setRowCount(0)
+    wrapper_layout.addWidget(table, 1)
+    return wrapper
+
+
+def _flaky_rows(items: Any) -> list[list[str]]:
+    rows: list[list[str]] = []
+    if not isinstance(items, list):
+        return rows
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            [
+                str(item.get("nodeid") or ""),
+                str(item.get("pass_count") or 0),
+                str(item.get("fail_count") or 0),
+                str(item.get("run_count") or 0),
+                f"{round(float(item.get('pass_rate') or 0) * 100, 1)}",
+                str(item.get("recent_status") or ""),
+                str(item.get("first_fail_run") or ""),
+            ]
+        )
+    return rows
+
+
+def _timing_regression_rows(items: Any) -> list[list[str]]:
+    rows: list[list[str]] = []
+    if not isinstance(items, list):
+        return rows
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            [
+                str(item.get("nodeid") or ""),
+                str(item.get("current_ms") or 0),
+                str(item.get("baseline_ms") or 0),
+                str(item.get("ratio") or 0) + "x",
+                "+" + str(item.get("delta_ms") or 0),
+                str(item.get("trend") or ""),
+            ]
+        )
+    return rows

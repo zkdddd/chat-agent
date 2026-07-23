@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import STATE_DIR
+from .junit_export import build_junit_xml
 from .run_log import summarize_run_log
 from .run_log_viewer import find_run_log, run_log_timeline, summarize_run_for_display
 from .run_self_check import analyze_run_health, format_run_health_report
@@ -97,6 +98,29 @@ def export_latest_run_markdown(
     if not rows:
         return None
     return export_run_markdown(rows[0]["path"], runs_dir, timeline_limit=timeline_limit)
+
+
+def export_run_junit_xml(
+    run_id_or_path: str | Path,
+    runs_dir: str | Path | None = None,
+) -> str | None:
+    """Return standard JUnit XML for a run, or None if the run is not found.
+
+    The XML contains one <testcase> per recorded per-test result, or a single
+    run-level testcase when no per-test events exist, so it is always a valid
+    JUnit document consumable by Jenkins / GitLab / Unity-CI.
+    """
+    path = _resolve_run_path(run_id_or_path, runs_dir)
+    if path is None:
+        return None
+    return build_junit_xml(path)
+
+
+def export_latest_run_junit_xml(runs_dir: str | Path | None = None) -> str | None:
+    rows = list_run_history(runs_dir, limit=1)
+    if not rows:
+        return None
+    return export_run_junit_xml(rows[0]["path"], runs_dir)
 
 
 def _history_row(path: Path) -> dict[str, Any] | None:

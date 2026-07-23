@@ -3000,6 +3000,48 @@ python -m pytest -q
 
 下一步建议做 JUnit XML 导出：把 Step1 已解析的 per-test 数据反向导出标准 `<testsuite>` XML + 无头验证 runner，喂 Jenkins/GitLab/Unity-CI，形成"看得见的平台（可视化）+ 接得上的 CI（集成）"组合；之后可加 mypy/ruff 工程门、自动生成未测符号测试脚手架。
 
+## 2026-07-23: JUnit XML Export
+
+### 做了什么
+
+- 新增 `kagent/agent/junit_export.py`：`build_junit_xml(run_log_path)` 读取 run log 的 `test_case_result` 事件，组装标准 JUnit XML `<testsuite>`——每条用例一个 `<testcase>`（classname/name/time），失败用例加 `<failure>`/`<error>` 子元素（带 type/message），skipped 加 `<skipped>`；按 nodeid 去重；suite 的 tests/failures/errors/skipped 计数按实际 testcase 重算。
+- 无 per-test 事件时（验证未跑或用了非 pytest 脚本命令）回退为单个运行级 `<testcase>` 摘要：按 `validation_failed`/run status 决定是否 failure，使导出在任何情况下都是合法、CI 可消费的 JUnit 文档。
+- `run_history.py` 新增 `export_run_junit_xml(run_id_or_path)` 和 `export_latest_run_junit_xml()`，与既有 `export_run_markdown` 平行；可按路径或 run id 解析。
+- Run Analytics 看板新增「Export JUnit XML」按钮：弹保存对话框，写 `export_latest_run_junit_xml()` 结果并提示路径。
+- 顺带修复了一个上轮看板提交埋下的结构 bug：4 个看板辅助函数（`_run_analytics_dashboard_widget` 等）误插在 `ChatWindow` 类中间，把 `_show_run_analytics` 等后半段方法截断成孤立嵌套函数（点 Run Analytics 会崩）。已将辅助函数移到文件末尾模块级区，ChatWindow 方法恢复连续。
+
+### 为什么做
+
+- 闭合 kagent「只消费 `--junitxml` 却不产出 JUnit XML」的单向不对称：`test_telemetry` 解析 junitxml，但没有对称导出，per-test 遥测无法接进 CI。
+- 这是 per-test 遥测路线（Step 1-4）的自然下游、也是「看得见的平台（可视化）+ 接得上的 CI（集成）」组合的后半句。测试开发/游戏测试开发岗每天面对 JUnit/Unity-Test-Runner pipeline，导出层信号零歧义。
+- RAG 评估还发现：269 条历史 run log 均无 `test_case_result`/`symbol_impacts` 事件（kagent 自身验证走 `verify.ps1`，被 `_looks_like_direct_pytest` 排除）。本步把导出能力建在「读 run log 的 test_case_result 事件」上，未来 run 触发 pytest 遥测即可自动有可导出数据；并为之后的 RAG failure-memory 预留了语料落盘路径。
+
+### 影响模块
+
+- `kagent/agent/junit_export.py`（新增）
+- `kagent/agent/run_history.py`
+- `kagent/ui/main_window.py`
+- `tests/test_junit_export.py`（新增）
+- `tests/test_run_history.py`
+- `README.md`
+- `docs/agent-development.md`
+
+### 验证
+
+已完成针对性验证和全量验证：
+
+```text
+python -m pytest -q tests/test_junit_export.py tests/test_run_history.py
+12 passed
+
+python -m pytest -q
+235 passed
+```
+
+### 后续
+
+下一步可选：真实覆盖率（替换 `validation.py:514-523` 硬编码 coverage_bonus）、测试生成（为 `related_test_count==0` 符号生成 pytest 脚手架）、mypy/ruff 工程门；以及排在这些之后的 rag-failure-memory（需先验证 JSONL「符号→失败→修复」三元组语料密度）。
+
 ## 当前验证入口
 
 推荐使用：

@@ -1,8 +1,11 @@
 import json
 import os
+import xml.etree.ElementTree as ET
 
 from kagent.agent.run_history import (
+    export_latest_run_junit_xml,
     export_latest_run_markdown,
+    export_run_junit_xml,
     export_run_markdown,
     list_run_history,
 )
@@ -132,3 +135,61 @@ def test_list_run_history_ignores_broken_logs(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["run_id"] == "run-1"
+
+
+def test_export_run_junit_xml_returns_valid_junit_for_run(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.agent.run_log.STATE_DIR", str(tmp_path))
+    monkeypatch.setattr("kagent.agent.run_history.STATE_DIR", str(tmp_path))
+
+    log = RunLogger(session_id="s", workspace_root=str(tmp_path))
+    log.write(
+        "test_case_result",
+        {"nodeid": "tests/test_x.py::test_a", "status": "passed", "duration_ms": 50},
+    )
+    log.write(
+        "test_case_result",
+        {"nodeid": "tests/test_x.py::test_b", "status": "failed", "duration_ms": 30, "message": "boom"},
+    )
+    log.finish("completed", {"validated": False, "validation_failed": True})
+
+    xml_text = export_run_junit_xml(log.path)
+
+    assert xml_text is not None
+    root = ET.fromstring(xml_text)
+    assert root.tag == "testsuite"
+    assert root.get("tests") == "2"
+    assert root.get("failures") == "1"
+
+    # Exporting by run_id (not path) resolves to the same run.
+    xml_by_id = export_run_junit_xml(log.run_id)
+    assert xml_by_id is not None
+    assert ET.fromstring(xml_by_id).get("tests") == "2"
+
+
+def test_export_latest_run_junit_xml_targets_newest_run(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.agent.run_log.STATE_DIR", str(tmp_path))
+    monkeypatch.setattr("kagent.agent.run_history.STATE_DIR", str(tmp_path))
+
+    older = RunLogger(session_id="s", workspace_root=str(tmp_path))
+    older.write("test_case_result", {"nodeid": "tests/x::old", "status": "passed", "duration_ms": 10})
+    older.finish("completed", {"validated": True})
+
+    newer = RunLogger(session_id="s", workspace_root=str(tmp_path))
+    newer.write("test_case_result", {"nodeid": "tests/x::new", "status": "failed", "duration_ms": 20, "message": "x"})
+    newer.finish("completed", {"validated": False, "validation_failed": True})
+    os.utime(older.path, (100, 100))
+    os.utime(newer.path, (200, 200))
+
+    xml_text = export_latest_run_junit_xml()
+
+    assert xml_text is not None
+    root = ET.fromstring(xml_text)
+    assert root.get("failures") == "1"
+    assert root.find("testcase").get("name") == "new"
+
+
+def test_export_run_junit_xml_returns_none_for_missing_run(tmp_path, monkeypatch):
+    monkeypatch.setattr("kagent.agent.run_history.STATE_DIR", str(tmp_path))
+
+    assert export_run_junit_xml("does-not-exist") is None
+    assert export_latest_run_junit_xml() is None

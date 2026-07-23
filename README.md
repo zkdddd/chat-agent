@@ -14,6 +14,7 @@ KAgent can be presented as a local desktop Coding Agent and test-development aut
 - Run Analytics now detects timing regressions per test case: it builds a cross-run duration history per nodeid, computes a median baseline, and flags tests whose latest duration jumped above a ratio + absolute-delta threshold while also classifying a slower/faster/stable trend, so a one-off spike is distinguished from a sustained slowdown. It also surfaces validation-command duration trends across runs.
 - Run Analytics now detects flaky tests: it builds a cross-run pass/fail history per nodeid (a failure anywhere in a run marks that run as failed, so a passing retry does not erase the flake signal) and flags tests that have both passed and failed across runs with enough history, distinguishing a flaky test (intermittent pass/fail) from a persistent regression (fails every run) and a stable test (always passes).
 - Run Analytics now renders a visual dashboard instead of a markdown text report: a pass-rate time-series chart plus flaky-test and timing-regression tables over the already-computed analytics, using pyqtgraph. It falls back to the markdown text view if pyqtgraph is unavailable, so the analytics always open.
+- Run Analytics now exports a standard JUnit XML report (one `<testcase>` per recorded per-test result, with `<failure>`/`<error>`/`<skipped>` children, or a single run-level testcase when no per-test events exist), so the per-test telemetry feeds Jenkins / GitLab / Unity-CI. A run can be exported by path or run id via `export_run_junit_xml` / `export_latest_run_junit_xml`.
 - Added `kagent/agent/run_analytics.py` for cross-run analytics and failure trend summaries.
 - Run Analytics now aggregates recent run status, health, quality-gate distribution, validation failure rate, unverified-change rate, failed tool rate, model error rate, top issue codes, top failing gate checks, top failed tools, top model errors, top validation commands, and recent problem runs.
 - Run Analytics can be filtered by the current workspace so project-level failure trends do not mix across different chats/projects.
@@ -133,6 +134,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - Agent 支持耗时回归检测，会按用例 nodeid 跨运行收集耗时历史，用最近多次的中位数作为基线，当最新一次耗时同时超过基线的倍数阈值和绝对增量阈值时判定为回归，并给出 slower/faster/stable 趋势方向，区分单次尖峰与持续变慢；同时汇总验证命令的跨运行耗时趋势。
 - Agent 支持 flaky 用例检测，会按用例 nodeid 跨运行收集 pass/fail 历史（同一运行内出现失败即记为该运行失败，避免重跑通过抹掉 flaky 信号），把"既通过又失败"且历史充足的用例判为 flaky，区分持续失败=回归、间歇失败=flaky、始终通过=稳定。
 - Agent 支持运行趋势可视化看板，把 Run Analytics 从 markdown 文本报告升级为 pass-rate 时序折线 + flaky 用例表 + 耗时回归表的 pyqtgraph 看板，pyqtgraph 不可用时自动回退为文本报告。
+- Agent 支持 JUnit XML 导出，会把某次运行（按路径或 run id）的 per-test 结果导出为标准 JUnit XML（每条用例一个 testcase，含 failure/error/skipped 子元素，无 per-test 数据时回退为运行级摘要），可直接喂给 Jenkins/GitLab/Unity-CI。
 - Agent 支持运行自检报告，可以基于日志判断本次运行是否可信，并标记未完成、未验证变更、验证失败、失败工具和循环风险。
 - Agent 支持最终回复可信度接入，最终回答会根据自检结果明确提示未验证变更、验证失败、失败工具或循环风险。
 - UI 支持运行调试入口，可以在 Agent 执行日志卡片中查看本次运行日志摘要、自检结果和事件时间线。
