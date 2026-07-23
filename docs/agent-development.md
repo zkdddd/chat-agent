@@ -3083,6 +3083,36 @@ python -m pytest -q
 
 下一步做上下文工程叙事（零代码，把已有 context 压缩/工具输出截断/项目记忆/跨会话摘要重新框成「上下文工程」写进 README+简历），之后真实覆盖率，再 rag-failure-memory。
 
+## 2026-07-23: Context Engineering Narrative
+
+### 做了什么
+
+- 纯文档变更，无代码改动。把 kagent 已有的四件上下文治理能力统一框成「上下文工程（context engineering）」叙事，写进 README 能力条。
+- 四件能力及其代码锚点（均已存在，本次只是显性化）：
+  1. 会话级压缩：`kagent/context.py:58 manage_context` 按 `CONTEXT_MAX_TOKENS`（`config.py:27`，默认 24000）水位压缩旧消息、保留近期关键对话，每次 LLM 请求触发并发出 "Context compacted (X -> Y tokens)" 事件。
+  2. 按工具粒度截断：`kagent/agent/tool_result_context.py` 对 read/search/list/symbol/command 各设上限（DEFAULT_TEXT_LIMIT=8000、READ_FILE_CONTENT_LIMIT=12000、COMMAND_STREAM_LIMIT=6000、SEARCH_MATCH_LIMIT=20 等），带 omitted 计数与 `context_compacted` 标志。
+  3. 长期项目记忆注入：`kagent/agent/project_memory.py` 按工作区保存项目结构摘要/入口/配置/常用验证命令/稳定偏好，每次运行注入 system prompt。
+  4. 跨会话滚动摘要：`kagent/db.py context_summaries` 表 + `prepare_session_history` 在恢复时把持久化摘要折叠回 prompt。
+
+### 为什么做
+
+- 「上下文工程」是 2026 AI Agent 的核心议题（RAG 的议题已转向上下文工程），而 kagent 这四件能力本就是上下文工程——只是之前分散叫"上下文管理/工具输出压缩/长期记忆"，没有统一成这个热词叙事。
+- 这是双向共享第二步、且零代码：测试开发岗读作"长任务稳定性"，AI 岗读作"上下文工程"（2026 热词）。把已有能力显性化即可拿到一个 AI 工程叙事点，无需新增依赖或逻辑。
+
+### 影响模块
+
+- `README.md`（能力条重写）
+- `docs/agent-development.md`（本块）
+- 简历草稿（见下）
+
+### 简历草稿（中文）
+
+> 实现上下文工程：会话级按水位压缩旧消息并保留近期关键对话、按工具粒度截断工具输出（带 omitted 计数）、按工作区注入长期项目记忆、跨会话持久化滚动摘要并在恢复时折叠回 prompt，避免长任务上下文膨胀与重复扫描。
+
+### 后续
+
+下一步做真实覆盖率（替换 `validation.py:514-523` 硬编码 coverage_bonus 为真 coverage.py + 趋势 + 回归 gate），再 rag-failure-memory。
+
 ## 当前验证入口
 
 推荐使用：
