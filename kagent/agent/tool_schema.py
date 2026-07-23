@@ -165,6 +165,26 @@ def tool_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "recall_similar_failures",
+                "description": (
+                    "Recall past similar test failures from run-log history (a test-failure knowledge base). "
+                    "Indexes per-test failures joined with the symbol impacts and change plans of the same run, and returns the closest historical failures by text similarity, including how the change was framed. "
+                    "Read-only. Returns insufficient_corpus when the run history is too thin to recall reliably."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Failure description, nodeid, or error message to match."},
+                        "k": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum matches to return."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "scaffold_test_for_symbol",
                 "description": (
                     "Generate a pytest scaffold (import + placeholder test functions) for an untested symbol, returning the suggested test file path and its content. "

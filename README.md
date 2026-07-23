@@ -17,6 +17,7 @@ KAgent can be presented as a local desktop Coding Agent and test-development aut
 - Run Analytics now exports a standard JUnit XML report (one `<testcase>` per recorded per-test result, with `<failure>`/`<error>`/`<skipped>` children, or a single run-level testcase when no per-test events exist), so the per-test telemetry feeds Jenkins / GitLab / Unity-CI. A run can be exported by path or run id via `export_run_junit_xml` / `export_latest_run_junit_xml`.
 - Agent now has read-only test-generation tools: `list_untested_symbols` finds production functions/classes/methods whose defining source file has no mapped test file (the coverage gap), and `scaffold_test_for_symbol` drafts a pytest scaffold (import + placeholder tests) for an untested symbol without writing the file — review it, then `write_file` + `run_command` to verify it collects.
 - Agent now measures real coverage: the `measure_coverage` tool runs pytest under coverage.py, returns the line/branch rate, persists a snapshot to coverage history, and reports a trend plus a regression gate (warns on a sustained drop). Validation ranking now rewards full-suite commands proportionally to the real measured coverage instead of the previous hardcoded label bonus, fixing a fake coverage metric.
+- Agent now has a test-failure memory: the `recall_similar_failures` tool indexes per-test failures from run-log history joined with the symbol impacts and change plans of the same run, and recalls the closest historical failures by text similarity (TF-IDF + cosine, no external embedding dependency), including how the change was framed. It honestly returns `insufficient_corpus` when the run history is too thin to recall reliably.
 - Added `kagent/agent/run_analytics.py` for cross-run analytics and failure trend summaries.
 - Run Analytics now aggregates recent run status, health, quality-gate distribution, validation failure rate, unverified-change rate, failed tool rate, model error rate, top issue codes, top failing gate checks, top failed tools, top model errors, top validation commands, and recent problem runs.
 - Run Analytics can be filtered by the current workspace so project-level failure trends do not mix across different chats/projects.
@@ -139,6 +140,7 @@ KAgent 当前阶段重点在代码 Agent 能力，不优先做复杂产品化扩
 - Agent 支持 JUnit XML 导出，会把某次运行（按路径或 run id）的 per-test 结果导出为标准 JUnit XML（每条用例一个 testcase，含 failure/error/skipped 子元素，无 per-test 数据时回退为运行级摘要），可直接喂给 Jenkins/GitLab/Unity-CI。
 - Agent 支持测试生成辅助，只读工具 `list_untested_symbols` 会列出"定义所在源文件没有对应测试文件"的产线函数/类/方法（覆盖缺口），`scaffold_test_for_symbol` 会为未测符号生成 pytest 脚手架（导入被测模块 + 占位测试），不自动写文件，需 `write_file` 保存后再用 `run_command` 验证可被发现。
 - Agent 支持真实覆盖率度量，只读工具 `measure_coverage` 会用 coverage.py 跑 pytest，返回行/分支覆盖率并持久化到覆盖率历史，给出趋势与回归 gate（覆盖率持续下降时告警）；验证命令排序改为按真实覆盖率给全量验证加分，替代之前写死的标签 bonus，修掉假指标。
+- Agent 支持测试失败记忆，只读工具 `recall_similar_failures` 会从运行日志历史索引每条用例失败（关联同次运行的 symbol_impacts 与 change_plan），按文本相似度（TF-IDF + 余弦，无外部 embedding 依赖）召回历史最相似失败及当时变更意图；运行历史过薄时诚实返回 `insufficient_corpus`，不假装召回。
 - Agent 支持运行自检报告，可以基于日志判断本次运行是否可信，并标记未完成、未验证变更、验证失败、失败工具和循环风险。
 - Agent 支持最终回复可信度接入，最终回答会根据自检结果明确提示未验证变更、验证失败、失败工具或循环风险。
 - UI 支持运行调试入口，可以在 Agent 执行日志卡片中查看本次运行日志摘要、自检结果和事件时间线。

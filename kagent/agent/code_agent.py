@@ -42,6 +42,7 @@ from .project_rules import (
 from .run_log import RunLogger
 from .symbol_change_plan import build_symbol_change_plan
 from .test_gen import find_untested_symbols, generate_test_scaffold
+from .failure_memory import recall_similar_failures as _recall_similar_failures
 from .coverage import measure_coverage as _measure_coverage, save_coverage_snapshot, coverage_trend, coverage_regression_gate
 from .validation import set_recent_coverage_rate
 from .symbol_index import find_symbol_contexts, find_symbol_references, find_symbols
@@ -173,6 +174,7 @@ class CodeAgent:
         "list_untested_symbols",
         "scaffold_test_for_symbol",
         "measure_coverage",
+        "recall_similar_failures",
         "suggest_self_improvements",
         "read_project_rules",
         "generate_project_rules",
@@ -1108,6 +1110,30 @@ class CodeAgent:
                 },
             )
 
+    def _emit_symbol_impacts_event(
+        self,
+        symbol_plan: dict[str, Any],
+        on_event: EventFn | None,
+    ) -> None:
+        """Emit a `symbol_impacts` event so failure-memory can index the
+        symbol -> related-tests connection as a retrievable corpus entry.
+        """
+        if not isinstance(symbol_plan, dict) or not symbol_plan.get("ok"):
+            return
+        impact = symbol_plan.get("impact_summary") if isinstance(symbol_plan.get("impact_summary"), dict) else {}
+        self._emit_event(
+            on_event,
+            {
+                "type": "symbol_impacts",
+                "symbol": symbol_plan.get("symbol"),
+                "definitions": symbol_plan.get("definitions") or [],
+                "related_tests": symbol_plan.get("related_tests") or [],
+                "validation_commands": symbol_plan.get("validation_commands") or [],
+                "risk_level": symbol_plan.get("risk_level") or impact.get("risk_level"),
+                "impact_score": symbol_plan.get("impact_score") or impact.get("impact_score"),
+            },
+        )
+
     def _read_failure_focus(
         self,
         *,
@@ -1284,6 +1310,11 @@ class CodeAgent:
             set_recent_coverage_rate(result.get("line_rate"))
             gate = coverage_regression_gate(trend)
             return {"ok": True, "coverage": result, "trend": trend, "gate": gate}
+        if name == "recall_similar_failures":
+            return _recall_similar_failures(
+                str(args.get("query") or ""),
+                k=int(args.get("k", 5)),
+            )
         if name == "scaffold_test_for_symbol":
             return generate_test_scaffold(
                 self.workspace.root,
@@ -1871,6 +1902,7 @@ class CodeAgent:
                 )
                 if name == "symbol_change_plan" and result_ok:
                     state.symbol_change_plans = [result, *(state.symbol_change_plans or [])][:8]
+                    self._emit_symbol_impacts_event(result, on_event)
                 if name in self.INSPECTION_TOOLS and result_ok:
                     state.inspected = True
                     self._set_plan_step(

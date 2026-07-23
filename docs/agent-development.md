@@ -3157,6 +3157,48 @@ python -m pytest -q
 
 下一步做 rag-failure-memory（需先验证 JSONL「符号→失败→修复」三元组语料密度）。
 
+## 2026-07-23: Test Failure Memory (RAG failure-memory)
+
+### 做了什么
+
+- 新增 `kagent/agent/failure_memory.py`：
+  - `collect_failure_corpus(runs_dir)` 扫 run log，把每个 run 的 `test_case_result`(失败) 与同 run 的 `symbol_impacts` + `change_plan` 关联成 `FailureRecord`（run_id/nodeid/status/failure_type/message/symbols/fix_hint），按 nodeid 去重。
+  - `FailureMemoryIndex` 用 TF-IDF + 余弦相似度（纯 Python，无外部 embedding 依赖、离线可复现）索引 FailureRecord 文本（nodeid + failure_type + message + symbols）。
+  - `recall_similar_failures(query, k)` 召回 top-k 历史相似失败 + 当时变更意图；语料 < 3 条时诚实返回 `insufficient_corpus`，不假装召回。
+- 语料发射层：`code_agent` 在 `symbol_change_plan` 成功后新增 `_emit_symbol_impacts_event`，把 symbol + related_tests + risk 落盘成独立 `symbol_impacts` 事件（之前只在 tool_result 里，不可索引），为 failure-memory 提供可检索语料。
+- 注册只读 agent 工具 `recall_similar_failures`，验证失败修复循环中可调用注入"上次类似失败怎么处理"。
+
+### 为什么做
+
+- 这是「双向共享」第四步、偏 AI 工程维度：测试开发岗读作"测试失败知识库 / triage"，AI 岗读作"语义检索 / RAG"。是唯一能化解"RAG 通用、低 test-dev 价值"批评的 RAG 变体——语料是 kagent 自己的测试运行日志，召回目标是测试失败与修复。
+- 诚实取舍：RAG 评估发现真实 run log 的「符号→失败→修复」三元组语料基本为空（269 条 run 里 symbol_impacts/change_plan=0，只有测试代码造的假失败数据）。所以本步先做**基础设施层**：补 symbol_impacts 发射层让未来真实 run 积累语料 + 建检索框架（含 insufficient_corpus 守卫），而非硬做一个会反伤简历的 toy RAG。语料随真实 run 积累后召回自动生效。
+- 用文本相似度（TF-IDF）而非 embedding API 的取舍：单开发者工具语料小、要求离线可复现、无外部 API 依赖；待语料规模上来再评估是否升级 embedding。
+
+### 影响模块
+
+- `kagent/agent/failure_memory.py`（新增）
+- `kagent/agent/code_agent.py`（symbol_impacts 发射层 + recall 工具）
+- `kagent/agent/tool_schema.py`
+- `tests/test_failure_memory.py`（新增）
+- `README.md`
+- `docs/agent-development.md`
+
+### 验证
+
+已完成针对性验证和全量验证：
+
+```text
+python -m pytest -q tests/test_failure_memory.py
+5 passed
+
+python -m pytest -q
+250 passed
+```
+
+### 后续
+
+四步路线（gentest → 上下文工程叙事 → 覆盖率真实化 → RAG failure-memory）全部完成。后续可：让真实 run 积累 failure-memory 语料后评估召回质量；mypy/ruff 工程门；coverage gate 接入 quality_gate。
+
 ## 当前验证入口
 
 推荐使用：
